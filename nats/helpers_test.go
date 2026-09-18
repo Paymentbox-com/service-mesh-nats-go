@@ -9,7 +9,7 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 
-	"github.com/Paymentbox-com/service-mesh-nats-go/mesh"
+	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
 const testWait = 3 * time.Second

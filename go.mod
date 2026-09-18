@@ -3,6 +3,7 @@ module github.com/Paymentbox-com/service-mesh-nats-go
 go 1.26.6
 
 require (
+	github.com/Paymentbox-com/service-mesh-go v0.1.0
 	github.com/nats-io/nats-server/v2 v2.14.7
 	github.com/nats-io/nats.go v1.53.1
 )

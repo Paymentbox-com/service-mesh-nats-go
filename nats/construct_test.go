@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Paymentbox-com/service-mesh-nats-go/mesh"
+	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
 func TestSubject(t *testing.T) {

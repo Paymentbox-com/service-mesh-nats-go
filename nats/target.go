@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/Paymentbox-com/service-mesh-nats-go/mesh"
+	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
 // subject assembles a target's segments into a NATS subject or returns

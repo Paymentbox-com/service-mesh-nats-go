@@ -9,7 +9,7 @@ import (
 
 	natsio "github.com/nats-io/nats.go"
 
-	"github.com/Paymentbox-com/service-mesh-nats-go/mesh"
+	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
 // Client implements mesh.Client over a NATS connection.

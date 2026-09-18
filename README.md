@@ -3,24 +3,23 @@
 A Go implementation of the
 [Service Mesh API Specification](https://github.com/Paymentbox-com/service-mesh-api)
 over NATS. Module path `github.com/Paymentbox-com/service-mesh-nats-go`. The
-specification is the authority for everything this package does; the Ruby
-implementation is
+specification is the authority for everything this package does. The Go
+contract it implements is
+[service-mesh-go](https://github.com/Paymentbox-com/service-mesh-go), and the
+Ruby implementation is
 [service-mesh-nats-ruby](https://github.com/Paymentbox-com/service-mesh-nats-ruby).
 
-Two packages:
-
-- `mesh` is the contract. `Target`, `ServiceMap`, `Message`, `Endpoint`,
-  `Subscriber`, the handler types, the `Client` and `Runtime` interfaces,
-  `Config`, the `deployment_group` and `consumer_group` keys, and the three
-  errors. No dependencies.
-- `nats` is a runtime for NATS on `nats.go`. It exports `New`,
-  `NewClient`, its configuration keys, and two `Option`s.
+One package, `nats`, a runtime for NATS on `nats.go`. It exports `New`,
+`NewClient`, its configuration keys, and two `Option`s. The contract types it
+implements, `mesh.Target`, `mesh.Message`, `mesh.Endpoint`, `mesh.Subscriber`,
+`mesh.Client`, `mesh.Runtime`, and the rest, come from
+`github.com/Paymentbox-com/service-mesh-go/mesh`.
 
 ## Usage
 
 ```go
 import (
-    "github.com/Paymentbox-com/service-mesh-nats-go/mesh"
+    "github.com/Paymentbox-com/service-mesh-go/mesh"
     "github.com/Paymentbox-com/service-mesh-nats-go/nats"
 )
 

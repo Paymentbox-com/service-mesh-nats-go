@@ -16,7 +16,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Paymentbox-com/service-mesh-nats-go/mesh"
+	"github.com/Paymentbox-com/service-mesh-go/mesh"
 	"github.com/Paymentbox-com/service-mesh-nats-go/nats"
 )
 

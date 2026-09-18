@@ -9,7 +9,7 @@ import (
 
 	natsio "github.com/nats-io/nats.go"
 
-	"github.com/Paymentbox-com/service-mesh-nats-go/mesh"
+	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
 // Configuration keys this runtime reads from a mesh.Config, beyond
