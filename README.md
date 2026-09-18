@@ -1,7 +1,11 @@
 # service-mesh-nats-go
 
-A Go implementation of the Service Mesh API Specification over NATS. Module
-path `github.com/Paymentbox-com/service-mesh-nats-go`.
+A Go implementation of the
+[Service Mesh API Specification](https://github.com/Paymentbox-com/service-mesh-api)
+over NATS. Module path `github.com/Paymentbox-com/service-mesh-nats-go`. The
+specification is the authority for everything this package does; the Ruby
+implementation is
+[service-mesh-nats-ruby](https://github.com/Paymentbox-com/service-mesh-nats-ruby).
 
 Two packages:
 
@@ -54,6 +58,116 @@ A process that only calls uses `nats.NewClient(cfg)` and closes it when
 done. `examples/echo` is a single-process version of the above.
 `examples/server` and `examples/client` split it across two processes;
 `E2E.md` walks through them.
+
+## Examples
+
+Each snippet below runs as written against a local `nats-server`. The
+`echo`, `created`, and `sm` values are the ones declared under Usage.
+
+### A server process
+
+Serves one endpoint and one subscriber until SIGINT or SIGTERM, then drains
+for up to ten seconds.
+
+```go
+func main() {
+    cfg := mesh.Config{nats.URLKey: os.Getenv("NATS_URL"), mesh.DeploymentGroupKey: "demo"}
+
+    rt, err := nats.New(cfg, sm,
+        []mesh.Endpoint{{Target: echo, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
+            return mesh.Message{Payload: m.Payload}, nil
+        }}},
+        []mesh.Subscriber{{Target: created, Handler: func(ctx context.Context, m mesh.Message) error {
+            log.Printf("created: %s", m.Payload)
+            return nil
+        }}},
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    if err := rt.Start(context.Background()); err != nil {
+        log.Fatal(err)
+    }
+
+    stop := make(chan os.Signal, 1)
+    signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+    <-stop
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // drain budget
+    defer cancel()
+    if err := rt.Stop(ctx); err != nil {
+        log.Printf("stop: %v", err) // handlers were abandoned
+    }
+}
+```
+
+### A call-only client process
+
+Makes one request with metadata and a per-call timeout, sorts the outcomes,
+then publishes an event.
+
+```go
+c, err := nats.NewClient(mesh.Config{nats.URLKey: os.Getenv("NATS_URL")})
+if err != nil {
+    log.Fatal(err)
+}
+defer func() { _ = c.Close() }()
+
+ctx := context.Background()
+reply, err := c.Request(ctx, mesh.Message{
+    Target:   echo,
+    Metadata: map[string]string{"Request-Id": "1"},
+    Payload:  []byte("hello"),
+}, map[string]string{nats.RequestTimeoutKey: "2s"})
+
+var he *nats.HandlerError
+switch {
+case err == nil:
+    fmt.Printf("%s %v\n", reply.Payload, reply.Metadata)
+case errors.Is(err, mesh.ErrKindMismatch): // a topic target given to Request
+case errors.Is(err, nats.ErrNoResponders): // nothing serves demo.echo
+case errors.Is(err, nats.ErrTimeout):      // no reply within request_timeout
+case errors.As(err, &he):                  // the handler failed: he.Text
+default:                                   // any other nats.go error, unchanged
+}
+
+if err := c.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42")}, nil); err != nil {
+    log.Fatal(err)
+}
+```
+
+### Consumer groups
+
+Two deployments on one topic each handle every event once. A subscriber
+with `consumer_group` set to `none` handles every event on every instance.
+
+```go
+onCreated := func(ctx context.Context, m mesh.Message) error {
+    log.Printf("created: %s", m.Payload)
+    return nil
+}
+
+// billing and audit each run this subscriber under their own
+// deployment_group, so every event is handled once per deployment.
+sub := mesh.Subscriber{Target: created, Handler: onCreated}
+billing, _ := nats.New(mesh.Config{nats.URLKey: url, mesh.DeploymentGroupKey: "billing"}, sm, nil, []mesh.Subscriber{sub})
+audit, _ := nats.New(mesh.Config{nats.URLKey: url, mesh.DeploymentGroupKey: "audit"}, sm, nil, []mesh.Subscriber{sub})
+
+// Every instance of a deployment handles every event: no group at all.
+broadcast := mesh.Subscriber{
+    Target:   created,
+    Metadata: map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone},
+    Handler:  onCreated,
+}
+cache, _ := nats.New(mesh.Config{nats.URLKey: url, mesh.DeploymentGroupKey: "cache"}, sm, nil, []mesh.Subscriber{broadcast})
+
+for _, rt := range []*nats.Runtime{billing, audit, cache} {
+    if err := rt.Start(ctx); err != nil {
+        log.Fatal(err)
+    }
+}
+// One publish to created now produces three "created" lines: billing, audit, cache.
+```
 
 ## What the NATS runtime decides
 
