@@ -8,6 +8,10 @@ contract it implements is
 [service-mesh-go](https://github.com/Paymentbox-com/service-mesh-go), and the
 Ruby implementation is
 [service-mesh-nats-ruby](https://github.com/Paymentbox-com/service-mesh-nats-ruby).
+The [gRPC Service Mesh API](https://github.com/Paymentbox-com/grpc-service-mesh-api)
+is the protocol layer that generates code served over this transport from
+protobuf definitions, through its Go library
+[grpc-service-mesh-go](https://github.com/Paymentbox-com/grpc-service-mesh-go).
 
 One package, `nats`, a runtime for NATS on `nats.go`. It exports `New`,
 `NewClient`, its configuration keys, and two `Option`s. The contract types it
