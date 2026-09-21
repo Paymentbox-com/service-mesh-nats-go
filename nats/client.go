@@ -15,6 +15,7 @@ import (
 // Client implements mesh.Client over a NATS connection.
 type Client struct {
 	nc             atomic.Pointer[natsio.Conn]
+	serviceMap     mesh.ServiceMap
 	requestTimeout time.Duration
 	ownsConn       bool
 	subjects       sync.Map // targetKey -> string
@@ -23,9 +24,9 @@ type Client struct {
 
 var _ mesh.Client = (*Client)(nil)
 
-// NewClient connects to NATS and returns a client that owns the connection.
-// mesh.DeploymentGroupKey is ignored.
-func NewClient(cfg mesh.Config, opts ...Option) (*Client, error) {
+// NewClient connects to NATS and returns a client that owns the connection
+// and holds serviceMap. mesh.DeploymentGroupKey is ignored.
+func NewClient(cfg mesh.Config, serviceMap mesh.ServiceMap, opts ...Option) (*Client, error) {
 	s, err := parseSettings(cfg, opts, false)
 	if err != nil {
 		return nil, err
@@ -34,15 +35,22 @@ func NewClient(cfg mesh.Config, opts ...Option) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{requestTimeout: s.requestTimeout, ownsConn: true}
+	c := &Client{serviceMap: serviceMap, requestTimeout: s.requestTimeout, ownsConn: true}
 	c.nc.Store(nc)
 	return c, nil
 }
 
 // newSharedClient returns a client whose connection a Runtime sets and
 // clears. Its Close is a no-op.
-func newSharedClient(s settings) *Client {
-	return &Client{requestTimeout: s.requestTimeout}
+func newSharedClient(s settings, serviceMap mesh.ServiceMap) *Client {
+	return &Client{serviceMap: serviceMap, requestTimeout: s.requestTimeout}
+}
+
+// ServiceMap returns the map this client was built with: the one given to
+// NewClient, or the runtime's for a client from Runtime.Client. The client
+// does not otherwise use it.
+func (c *Client) ServiceMap() mesh.ServiceMap {
+	return c.serviceMap
 }
 
 // Request sends msg to a route target and returns the reply.

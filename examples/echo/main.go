@@ -57,7 +57,7 @@ func main() {
 		}
 	}()
 
-	client, err := nats.NewClient(cfg)
+	client, err := nats.NewClient(cfg, serviceMap)
 	if err != nil {
 		log.Fatal(err)
 	}

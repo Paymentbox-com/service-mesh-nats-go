@@ -58,6 +58,12 @@
 // no-op, and its Request and Publish return ErrNotRunning outside the running
 // window.
 //
+// # Service map
+//
+// New and NewClient each take a mesh.ServiceMap. The runtime and the client
+// hold it and return it from ServiceMap; a client from Runtime.Client returns
+// the runtime's. Nothing here validates a target against it.
+//
 // # Errors
 //
 // Transport errors from nats.go are returned unchanged, most often

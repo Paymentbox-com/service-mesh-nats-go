@@ -68,7 +68,7 @@ func startRuntime(t *testing.T, cfg mesh.Config, endpoints []mesh.Endpoint, subs
 
 func newClient(t *testing.T, cfg mesh.Config) *Client {
 	t.Helper()
-	c, err := NewClient(cfg)
+	c, err := NewClient(cfg, mesh.ServiceMap{})
 	if err != nil {
 		t.Fatal(err)
 	}

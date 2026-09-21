@@ -53,8 +53,10 @@ reply, err := c.Request(ctx, mesh.Message{Target: echo, Payload: []byte("hi")}, 
 err = c.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42")}, nil)
 ```
 
-A process that only calls uses `nats.NewClient(cfg)` and closes it when
-done. `examples/echo` is a single-process version of the above.
+A process that only calls uses `nats.NewClient(cfg, sm)` and closes it when
+done. `rt.ServiceMap()`, `rt.Client().ServiceMap()`, and a standalone
+client's `ServiceMap()` return the map each was built with; the transport
+does not validate targets against it. `examples/echo` is a single-process version of the above.
 `examples/server` and `examples/client` split it across two processes;
 `E2E.md` walks through them.
 
@@ -106,7 +108,7 @@ Makes one request with metadata and a per-call timeout, sorts the outcomes,
 then publishes an event.
 
 ```go
-c, err := nats.NewClient(mesh.Config{nats.URLKey: os.Getenv("NATS_URL")})
+c, err := nats.NewClient(mesh.Config{nats.URLKey: os.Getenv("NATS_URL")}, sm)
 if err != nil {
     log.Fatal(err)
 }

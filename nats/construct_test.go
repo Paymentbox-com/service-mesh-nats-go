@@ -165,6 +165,19 @@ func TestNew_ServiceMapKept(t *testing.T) {
 	}
 }
 
+func TestNewClient_ServiceMapKept(t *testing.T) {
+	url := startServer(t)
+	sm := mesh.ServiceMap{Targets: []mesh.Target{echoTarget, eventTarget}}
+	c, err := NewClient(testConfig(url), sm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if got := c.ServiceMap(); len(got.Targets) != 2 || !got.Targets[0].Equal(echoTarget) {
+		t.Fatalf("ServiceMap not kept: %+v", got)
+	}
+}
+
 func TestConsumerGroupResolution(t *testing.T) {
 	none := map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}
 	named := func(n string) map[string]string { return map[string]string{mesh.ConsumerGroupKey: n} }
@@ -211,7 +224,7 @@ func TestNew_BindingsUseConsumerGroup(t *testing.T) {
 
 func TestClient_ChecksBeforeConnection(t *testing.T) {
 	s, _ := parseSettings(testConfig(""), nil, true)
-	c := newSharedClient(s)
+	c := newSharedClient(s, mesh.ServiceMap{})
 	ctx := context.Background()
 
 	_, err := c.Request(ctx, mesh.Message{Target: mesh.Target{Segments: []string{"a"}, Kind: mesh.KindTopic}}, nil)

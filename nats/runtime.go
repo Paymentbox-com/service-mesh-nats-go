@@ -71,7 +71,7 @@ func New(cfg mesh.Config, serviceMap mesh.ServiceMap, endpoints []mesh.Endpoint,
 	r := &Runtime{
 		settings:   s,
 		serviceMap: serviceMap,
-		client:     newSharedClient(s),
+		client:     newSharedClient(s, serviceMap),
 		sem:        make(chan struct{}, s.concurrency),
 	}
 

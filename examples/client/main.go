@@ -23,6 +23,7 @@ import (
 var (
 	echoTarget    = mesh.Target{Segments: []string{"demo", "echo"}, Kind: mesh.KindRoute}
 	createdTarget = mesh.Target{Segments: []string{"demo", "created"}, Kind: mesh.KindTopic}
+	serviceMap    = mesh.ServiceMap{Targets: []mesh.Target{echoTarget, createdTarget}}
 )
 
 func main() {
@@ -38,7 +39,7 @@ func main() {
 		opts[nats.RequestTimeoutKey] = t
 	}
 
-	c, err := nats.NewClient(cfg)
+	c, err := nats.NewClient(cfg, serviceMap)
 	if err != nil {
 		log.Fatalf("connect: %v", err)
 	}
