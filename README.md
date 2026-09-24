@@ -47,7 +47,7 @@ rt, err := nats.New(cfg, sm,
         return nil
     }}},
 )
-if err != nil { /* mesh.ErrNoDeploymentGroup, mesh.ErrKindMismatch, mesh.ErrInvalidTarget, nats.ErrBadConfig, nats.ErrDuplicateTarget */ }
+if err != nil { /* mesh.ErrNoDeploymentGroup, mesh.ErrKindMismatch, mesh.ErrInvalidTarget, nats.ErrBadConfig */ }
 
 if err := rt.Start(ctx); err != nil { /* connect or subscribe failure */ }
 defer rt.Stop(ctx) // closes rt.Client()
@@ -210,7 +210,8 @@ from the `Endpoint` or `Subscriber` first, then from its `Target`.
 **Delivery.** A consumer group is a NATS queue group. Every endpoint and
 subscriber joins the deployment group unless `consumer_group` overrides it.
 `none` gives a plain subscription, so every instance handles every message,
-and for an endpoint every instance replies.
+and for an endpoint every instance replies. Two bindings on one subject are
+two NATS subscriptions, with whatever delivery NATS gives them.
 
 **Handler failure.** An endpoint handler that returns an error or panics
 produces an empty reply carrying the error text in `HandlerErrorHeader`; the
@@ -235,8 +236,7 @@ were abandoned. The specification's drain in seconds is the context's
 deadline. A runtime does not restart. Closing the runtime's client directly
 ends the runtime's connection; `Stop` afterwards returns the drain result.
 
-**Errors.** The package defines `ErrBadConfig`, `ErrDuplicateTarget`,
-`ErrAlreadyStarted`, `ErrStopped`, `ErrNotConnected` (a `Request` or
+**Errors.** The package defines `ErrBadConfig`, `ErrAlreadyStarted`, `ErrStopped`, `ErrNotConnected` (a `Request` or
 `Publish` on a client that has not connected, which is a runtime's client
 before `Start`), `ErrClosed` (a `Request` or `Publish` after `Close`, which
 for a runtime's client is after `Stop`), and `*HandlerError`. The three

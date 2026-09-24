@@ -27,11 +27,6 @@ var (
 	// ErrStopped is returned by Start after Stop. A runtime is not
 	// restartable.
 	ErrStopped = errors.New("nats: runtime has been stopped")
-
-	// ErrDuplicateTarget is returned by New when two endpoints, two
-	// subscribers, or an endpoint and a subscriber assemble to the same
-	// subject.
-	ErrDuplicateTarget = errors.New("nats: duplicate target")
 )
 
 // HandlerError is returned by Request when the serving handler returned an

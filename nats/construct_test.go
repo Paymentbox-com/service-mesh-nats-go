@@ -131,20 +131,6 @@ func TestNew_InvalidTarget(t *testing.T) {
 	}
 }
 
-func TestNew_DuplicateTarget(t *testing.T) {
-	ep := mesh.Endpoint{Target: mesh.Target{Segments: []string{"a", "b"}, Kind: mesh.KindRoute}, Handler: okEndpoint}
-	_, err := New(testConfig(""), mesh.ServiceMap{}, []mesh.Endpoint{ep, ep}, nil)
-	if !errors.Is(err, ErrDuplicateTarget) {
-		t.Fatalf("two endpoints: want ErrDuplicateTarget, got %v", err)
-	}
-
-	sub := mesh.Subscriber{Target: mesh.Target{Segments: []string{"a", "b"}, Kind: mesh.KindTopic}, Handler: okSubscriber}
-	_, err = New(testConfig(""), mesh.ServiceMap{}, []mesh.Endpoint{ep}, []mesh.Subscriber{sub})
-	if !errors.Is(err, ErrDuplicateTarget) {
-		t.Fatalf("endpoint and subscriber on one subject: want ErrDuplicateTarget, got %v", err)
-	}
-}
-
 func TestNew_NilHandler(t *testing.T) {
 	_, err := New(testConfig(""), mesh.ServiceMap{}, []mesh.Endpoint{{
 		Target: mesh.Target{Segments: []string{"a"}, Kind: mesh.KindRoute},

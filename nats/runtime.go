@@ -61,7 +61,8 @@ var _ mesh.Runtime = (*Runtime)(nil)
 
 // New validates cfg and every binding and returns a runtime that is not yet
 // connected. It returns mesh.ErrNoDeploymentGroup, ErrBadConfig,
-// mesh.ErrKindMismatch, mesh.ErrInvalidTarget, or ErrDuplicateTarget.
+// mesh.ErrKindMismatch, or mesh.ErrInvalidTarget. Two bindings that assemble
+// to the same subject become two subscriptions.
 func New(cfg mesh.Config, serviceMap mesh.ServiceMap, endpoints []mesh.Endpoint, subscribers []mesh.Subscriber, opts ...Option) (*Runtime, error) {
 	s, err := parseSettings(cfg, opts, true)
 	if err != nil {
@@ -74,7 +75,6 @@ func New(cfg mesh.Config, serviceMap mesh.ServiceMap, endpoints []mesh.Endpoint,
 		sem:        make(chan struct{}, s.concurrency),
 	}
 
-	seen := make(map[string]struct{}, len(endpoints)+len(subscribers))
 	bind := func(t mesh.Target, want mesh.Kind, use string, md map[string]string) (binding, error) {
 		if err := checkKind(t, want, use); err != nil {
 			return binding{}, err
@@ -83,10 +83,6 @@ func New(cfg mesh.Config, serviceMap mesh.ServiceMap, endpoints []mesh.Endpoint,
 		if err != nil {
 			return binding{}, err
 		}
-		if _, dup := seen[subj]; dup {
-			return binding{}, fmt.Errorf("%w: %q", ErrDuplicateTarget, subj)
-		}
-		seen[subj] = struct{}{}
 		return binding{
 			subject: subj,
 			queue:   consumerGroup(md, t.Metadata, s.deploymentGroup),

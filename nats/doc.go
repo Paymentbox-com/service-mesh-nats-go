@@ -33,7 +33,8 @@
 // by mesh.DeploymentGroupKey unless mesh.ConsumerGroupKey overrides it.
 // mesh.ConsumerGroupNone gives a plain subscription: every instance receives
 // every message, and for an endpoint every instance replies. Any other value
-// names the group.
+// names the group. Two bindings on one subject are two subscriptions, with
+// whatever delivery NATS gives them.
 //
 // # Handler failure
 //
