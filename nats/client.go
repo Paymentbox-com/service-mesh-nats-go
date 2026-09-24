@@ -4,19 +4,19 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	natsio "github.com/nats-io/nats.go"
 
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
-// Client implements mesh.Client over a NATS connection it owns. A client is
-// unconnected, connected, or closed. NewClient returns a connected client. A
-// Runtime builds an unconnected client, connects it in Start, and closes it
-// in Stop.
+// Client implements mesh.Client over a NATS connection it owns. NewClient
+// returns a connected client and Close closes it. A Runtime is built from a
+// Client and subscribes on its connection; the runtime's Stop closes it.
 type Client struct {
-	settings   settings
-	serviceMap mesh.ServiceMap
+	requestTimeout time.Duration
+	serviceMap     mesh.ServiceMap
 
 	mu     sync.Mutex // guards nc and closed
 	nc     *natsio.Conn
@@ -26,46 +26,24 @@ type Client struct {
 var _ mesh.Client = (*Client)(nil)
 
 // NewClient connects to NATS and returns a client that owns the connection
-// and holds serviceMap. mesh.DeploymentGroupKey is ignored.
+// and holds serviceMap. cfg is read for URLKey, NameKey, ConnectTimeoutKey,
+// and RequestTimeoutKey; every other key is ignored. Of the options, only
+// WithNATSOptions applies. A value that does not parse returns ErrBadConfig;
+// a connection failure returns the nats.go error unchanged.
 func NewClient(cfg mesh.Config, serviceMap mesh.ServiceMap, opts ...Option) (*Client, error) {
-	s, err := parseSettings(cfg, opts, false)
+	s, err := parseClientSettings(cfg, opts)
 	if err != nil {
 		return nil, err
 	}
-	c := newClient(s, serviceMap)
-	if err := c.connect(); err != nil {
+	nc, err := s.connect()
+	if err != nil {
 		return nil, err
 	}
-	return c, nil
+	return &Client{requestTimeout: s.requestTimeout, serviceMap: serviceMap, nc: nc}, nil
 }
 
-// newClient returns an unconnected client.
-func newClient(s settings, serviceMap mesh.ServiceMap) *Client {
-	return &Client{settings: s, serviceMap: serviceMap}
-}
-
-// connect opens the connection. On a connected client it returns nil; after
-// Close it returns ErrClosed.
-func (c *Client) connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return ErrClosed
-	}
-	if c.nc != nil {
-		return nil
-	}
-	nc, err := c.settings.connect()
-	if err != nil {
-		return err
-	}
-	c.nc = nc
-	return nil
-}
-
-// ServiceMap returns the map this client was built with: the one given to
-// NewClient, or the runtime's for a client from Runtime.Client. The client
-// does not otherwise use it.
+// ServiceMap returns the map given to NewClient. The client does not
+// otherwise use it.
 func (c *Client) ServiceMap() mesh.ServiceMap {
 	return c.serviceMap
 }
@@ -84,7 +62,7 @@ func (c *Client) Request(ctx context.Context, msg mesh.Message, opts map[string]
 	if err != nil {
 		return mesh.Message{}, err
 	}
-	timeout, err := durationSetting(opts, RequestTimeoutKey, c.settings.requestTimeout)
+	timeout, err := durationSetting(opts, RequestTimeoutKey, c.requestTimeout)
 	if err != nil {
 		return mesh.Message{}, err
 	}
@@ -152,30 +130,25 @@ func (c *Client) Publish(ctx context.Context, msg mesh.Message, opts map[string]
 	})
 }
 
-// Close closes the connection when one is open and marks the client closed.
-// It is idempotent and always returns nil. For a client from Runtime.Client
-// this ends the runtime's connection.
+// Close closes the connection and marks the client closed. It is idempotent
+// and always returns nil. For a client a Runtime was built from, this ends
+// the runtime's connection.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.closed = true
-	if c.nc != nil {
+	if !c.closed {
+		c.closed = true
 		c.nc.Close()
-		c.nc = nil
 	}
 	return nil
 }
 
-// connection returns the open connection, ErrClosed after Close, or
-// ErrNotConnected before connect.
+// connection returns the open connection, or ErrClosed after Close.
 func (c *Client) connection() (*natsio.Conn, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	switch {
-	case c.closed:
+	if c.closed {
 		return nil, ErrClosed
-	case c.nc == nil:
-		return nil, ErrNotConnected
 	}
 	return c.nc, nil
 }

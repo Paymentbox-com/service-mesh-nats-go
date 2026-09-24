@@ -2,7 +2,9 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,7 +14,7 @@ import (
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
-// flushBudget bounds the flush during Stop when ctx has no deadline.
+// flushBudget bounds the flush in Start and Stop when ctx has no deadline.
 const flushBudget = 5 * time.Second
 
 type runtimeState int
@@ -33,12 +35,12 @@ type binding struct {
 	subscriber mesh.SubscriberHandler
 }
 
-// Runtime implements mesh.Runtime over NATS.
+// Runtime implements mesh.Runtime over NATS. It is built from a Client and
+// serves its bindings on that client's connection.
 type Runtime struct {
-	settings   settings
-	serviceMap mesh.ServiceMap
-	bindings   []binding
-	client     *Client
+	client   *Client
+	logger   *slog.Logger
+	bindings []binding
 
 	mu    sync.Mutex // guards state, subs, and the lifecycle methods
 	state runtimeState
@@ -59,20 +61,29 @@ type Runtime struct {
 
 var _ mesh.Runtime = (*Runtime)(nil)
 
-// New validates cfg and every binding and returns a runtime that is not yet
-// connected. It returns mesh.ErrNoDeploymentGroup, ErrBadConfig,
-// mesh.ErrKindMismatch, or mesh.ErrInvalidTarget. Two bindings that assemble
-// to the same subject become two subscriptions.
-func New(cfg mesh.Config, serviceMap mesh.ServiceMap, endpoints []mesh.Endpoint, subscribers []mesh.Subscriber, opts ...Option) (*Runtime, error) {
-	s, err := parseSettings(cfg, opts, true)
+// New validates cfg and every binding and returns a runtime that serves them
+// on client's connection. cfg is read for mesh.DeploymentGroupKey, which is
+// required, and ConcurrencyKey; connection keys are ignored because client
+// already carries them. Of the options, only WithLogger applies.
+//
+// The parameter is a *Client, not a mesh.Client, because the runtime
+// subscribes through the NATS connection the client owns.
+//
+// New returns mesh.ErrNoDeploymentGroup, ErrBadConfig, mesh.ErrKindMismatch,
+// or mesh.ErrInvalidTarget. Two bindings that assemble to the same subject
+// become two subscriptions.
+func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers []mesh.Subscriber, opts ...Option) (*Runtime, error) {
+	if client == nil {
+		return nil, errors.New("nats: client is nil")
+	}
+	s, err := parseRuntimeSettings(cfg, opts)
 	if err != nil {
 		return nil, err
 	}
 	r := &Runtime{
-		settings:   s,
-		serviceMap: serviceMap,
-		client:     newClient(s, serviceMap),
-		sem:        make(chan struct{}, s.concurrency),
+		client: client,
+		logger: s.logger,
+		sem:    make(chan struct{}, s.concurrency),
 	}
 
 	bind := func(t mesh.Target, want mesh.Kind, use string, md map[string]string) (binding, error) {
@@ -115,15 +126,14 @@ func New(cfg mesh.Config, serviceMap mesh.ServiceMap, endpoints []mesh.Endpoint,
 	return r, nil
 }
 
-// ServiceMap returns the map given to New. This runtime does not otherwise
-// use it.
+// ServiceMap returns the client's map. This runtime does not otherwise use
+// it.
 func (r *Runtime) ServiceMap() mesh.ServiceMap {
-	return r.serviceMap
+	return r.client.ServiceMap()
 }
 
-// Client returns the client that owns this runtime's connection. It is the
-// same client in every state. Its Request and Publish return ErrNotConnected
-// before Start has succeeded and ErrClosed after Stop. Closing it directly
+// Client returns the client this runtime was built from, in every state.
+// Its Request and Publish return ErrClosed after Stop. Closing it directly
 // ends the runtime's connection.
 func (r *Runtime) Client() mesh.Client {
 	return r.client
@@ -134,11 +144,11 @@ func (r *Runtime) Running() bool {
 	return r.running.Load()
 }
 
-// Start connects the runtime's client, subscribes every binding on its
-// connection, and begins receiving. It returns ErrAlreadyStarted on a running
-// runtime and ErrStopped after Stop. A connection failure leaves the runtime
-// as it was. A subscribe or flush failure closes the client, so a later Start
-// returns ErrClosed.
+// Start subscribes every binding on the client's connection, flushes, and
+// begins receiving. It returns ErrAlreadyStarted on a running runtime,
+// ErrStopped after Stop, and ErrClosed when the client is closed. A
+// subscribe or flush failure removes the subscriptions made so far and
+// leaves the runtime and the client as they were.
 func (r *Runtime) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -153,9 +163,6 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 
-	if err := r.client.connect(); err != nil {
-		return err
-	}
 	nc, err := r.client.connection()
 	if err != nil {
 		return err
@@ -172,7 +179,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 			_ = s.Unsubscribe()
 		}
 		r.cancelHandlers()
-		_ = r.client.Close()
+		r.acceptMu.Lock()
+		r.accepting = false
+		r.acceptMu.Unlock()
 		return err
 	}
 
@@ -194,7 +203,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 
 	// Ensure the server has every subscription before Start returns.
-	if err := flush(ctx, nc, r.settings.connectTimeout); err != nil {
+	if err := flush(ctx, nc, flushBudget); err != nil {
 		return fail(err)
 	}
 
@@ -205,10 +214,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 }
 
 // Stop stops receiving, waits for in-flight handlers until ctx is done,
-// cancels the handlers' context, flushes, and closes the runtime's client.
-// It returns ctx.Err() when handlers were abandoned. Stop on a runtime that
-// is not running does nothing. When the client was closed directly, Stop
-// skips the flush and returns the drain result.
+// cancels the handlers' context, flushes, and closes the client. It returns
+// ctx.Err() when handlers were abandoned. Stop on a runtime that is not
+// running does nothing. When the client was closed directly, Stop skips the
+// flush and returns the drain result.
 func (r *Runtime) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -242,7 +251,7 @@ func (r *Runtime) Stop(ctx context.Context) error {
 
 	if nc, err := r.client.connection(); err == nil && drainErr == nil {
 		if err := flush(ctx, nc, flushBudget); err != nil {
-			r.settings.logger.Warn("nats: flush during stop failed", "error", err)
+			r.logger.Warn("nats: flush during stop failed", "error", err)
 		}
 	}
 
@@ -280,14 +289,14 @@ func (r *Runtime) serve(nc *natsio.Conn, b binding, m *natsio.Msg) {
 
 	if b.subscriber != nil {
 		if err := callSubscriber(r.handlerCtx, b.subscriber, in); err != nil {
-			r.settings.logger.Error("nats: subscriber handler failed", "subject", b.subject, "error", err)
+			r.logger.Error("nats: subscriber handler failed", "subject", b.subject, "error", err)
 		}
 		return
 	}
 
 	out, err := callEndpoint(r.handlerCtx, b.endpoint, in)
 	if err != nil {
-		r.settings.logger.Error("nats: endpoint handler failed", "subject", b.subject, "error", err)
+		r.logger.Error("nats: endpoint handler failed", "subject", b.subject, "error", err)
 	}
 	if m.Reply == "" {
 		return
@@ -302,7 +311,7 @@ func (r *Runtime) serve(nc *natsio.Conn, b binding, m *natsio.Msg) {
 		reply.Data = out.Payload
 	}
 	if err := nc.PublishMsg(reply); err != nil {
-		r.settings.logger.Error("nats: reply failed", "subject", b.subject, "error", err)
+		r.logger.Error("nats: reply failed", "subject", b.subject, "error", err)
 	}
 }
 

@@ -245,29 +245,58 @@ func TestPublish_ConsumerGroupOnTarget(t *testing.T) {
 	waitFor(t, func() bool { return received.Load() >= 2 })
 }
 
-func TestRuntime_ClientSameBeforeAndAfterStart(t *testing.T) {
+func TestRuntime_ClientIsTheGivenClient(t *testing.T) {
 	url := startServer(t)
-	r, err := New(testConfig(url), mesh.ServiceMap{}, nil, nil)
+	c := testClient(t, testConfig(url))
+	r, err := New(c, testConfig(""), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := r.Client()
+	if r.Client() != mesh.Client(c) {
+		t.Fatal("Client before Start is not the given client")
+	}
 	if err := r.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.Stop(context.Background()) })
-	if r.Client() != before {
-		t.Fatal("Client after Start is a different client")
+	if r.Client() != mesh.Client(c) {
+		t.Fatal("Client while running is not the given client")
 	}
-	if _, err := before.Request(context.Background(), mesh.Message{Target: echoTarget}, nil); !errors.Is(err, natsio.ErrNoResponders) {
-		t.Fatalf("Request on the client from before Start: want ErrNoResponders, got %v", err)
+	if err := r.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.Client() != mesh.Client(c) {
+		t.Fatal("Client after Stop is not the given client")
+	}
+}
+
+func TestStart_ClosedClient(t *testing.T) {
+	url := startServer(t)
+	c := testClient(t, testConfig(url))
+	r, err := New(c, testConfig(""), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Start with a closed client: want ErrClosed, got %v", err)
+	}
+	if r.Running() {
+		t.Fatal("Running after failed Start")
 	}
 }
 
 func TestStop_ClosesClient(t *testing.T) {
 	url := startServer(t)
-	r := startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
-	c := r.Client()
+	c := testClient(t, testConfig(url))
+	r, err := New(c, testConfig(""), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil); err != nil {
 		t.Fatalf("while running: %v", err)
 	}
@@ -297,7 +326,7 @@ func TestStop_AfterClientClosedDirectly(t *testing.T) {
 
 func TestLifecycle(t *testing.T) {
 	url := startServer(t)
-	r, err := New(testConfig(url), mesh.ServiceMap{}, nil, nil)
+	r, err := New(testClient(t, testConfig(url)), testConfig(""), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,20 +358,6 @@ func TestLifecycle(t *testing.T) {
 	}
 	if err := r.Start(ctx); !errors.Is(err, ErrStopped) {
 		t.Fatalf("Start after Stop: want ErrStopped, got %v", err)
-	}
-}
-
-func TestStart_ConnectFailure(t *testing.T) {
-	cfg := mesh.Config{URLKey: "nats://127.0.0.1:1", ConnectTimeoutKey: "200ms", mesh.DeploymentGroupKey: "test"}
-	r, err := New(cfg, mesh.ServiceMap{}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Start(context.Background()); err == nil {
-		t.Fatal("want connect error")
-	}
-	if r.Running() {
-		t.Fatal("Running after failed Start")
 	}
 }
 

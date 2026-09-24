@@ -44,7 +44,12 @@ func main() {
 		mesh.DeploymentGroupKey: deployment,
 	}
 
-	rt, err := nats.New(cfg, serviceMap,
+	client, err := nats.NewClient(cfg, serviceMap)
+	if err != nil {
+		log.Fatalf("connect: %v", err)
+	}
+
+	rt, err := nats.New(client, cfg,
 		[]mesh.Endpoint{{Target: echoTarget, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
 			log.Printf("echo request %q metadata %v", m.Payload, m.Metadata)
 			if string(m.Payload) == "fail" {
@@ -83,7 +88,7 @@ func main() {
 	log.Print("stopping, draining up to 10s")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := rt.Stop(ctx); err != nil {
+	if err := rt.Stop(ctx); err != nil { // closes client
 		log.Printf("stop: %v", err)
 	}
 	log.Print("stopped")

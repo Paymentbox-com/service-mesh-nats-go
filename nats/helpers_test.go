@@ -23,6 +23,7 @@ func okEndpoint(ctx context.Context, m mesh.Message) (mesh.Message, error) { ret
 func okSubscriber(ctx context.Context, m mesh.Message) error               { return nil }
 
 // testConfig is the smallest Config New accepts, with url added when set.
+// NewClient reads the url and New the deployment group.
 func testConfig(url string) mesh.Config {
 	cfg := mesh.Config{mesh.DeploymentGroupKey: "test"}
 	if url != "" {
@@ -49,10 +50,17 @@ func startServer(t *testing.T) string {
 	return ns.ClientURL()
 }
 
+// startRuntime builds a client from cfg, a runtime on it with opts, and
+// starts it. Stop at cleanup closes the client.
 func startRuntime(t *testing.T, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers []mesh.Subscriber, opts ...Option) *Runtime {
 	t.Helper()
-	r, err := New(cfg, mesh.ServiceMap{}, endpoints, subscribers, opts...)
+	c, err := NewClient(cfg, mesh.ServiceMap{})
 	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(c, cfg, endpoints, subscribers, opts...)
+	if err != nil {
+		_ = c.Close()
 		t.Fatal(err)
 	}
 	if err := r.Start(context.Background()); err != nil {

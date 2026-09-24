@@ -1,5 +1,5 @@
 // Command echo serves an echo endpoint and an event subscriber over NATS,
-// then calls both from a separate client and exits.
+// then calls both through the runtime's client and exits.
 //
 // Run a local server first:
 //
@@ -33,7 +33,12 @@ func main() {
 
 	received := make(chan mesh.Message, 1)
 
-	rt, err := nats.New(cfg, serviceMap,
+	client, err := nats.NewClient(cfg, serviceMap)
+	if err != nil {
+		log.Fatalf("connect: %v", err)
+	}
+
+	rt, err := nats.New(client, cfg,
 		[]mesh.Endpoint{{Target: echoTarget, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
 			return mesh.Message{
 				Metadata: map[string]string{"Echoed-By": "demo"},
@@ -51,17 +56,11 @@ func main() {
 	if err := rt.Start(ctx); err != nil {
 		log.Fatalf("start: %v", err)
 	}
-	defer func() {
+	defer func() { // closes client
 		if err := rt.Stop(ctx); err != nil {
 			log.Printf("stop: %v", err)
 		}
 	}()
-
-	client, err := nats.NewClient(cfg, serviceMap)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer func() { _ = client.Close() }()
 
 	reply, err := client.Request(ctx, mesh.Message{
 		Target:   echoTarget,

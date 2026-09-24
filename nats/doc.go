@@ -9,11 +9,13 @@
 //
 // # Configuration
 //
-// A mesh.Config is parsed at construction. Beyond mesh.DeploymentGroupKey the
-// keys are URLKey, NameKey, ConnectTimeoutKey, RequestTimeoutKey, and
-// ConcurrencyKey. A value that does not parse yields ErrBadConfig. Values
-// that cannot be strings, the logger and extra nats.Options, are passed as
-// Option arguments.
+// A mesh.Config is parsed at construction. NewClient reads the connection
+// keys URLKey, NameKey, ConnectTimeoutKey, and RequestTimeoutKey. New reads
+// mesh.DeploymentGroupKey, which is required, and ConcurrencyKey. Each
+// constructor ignores the other's keys, so one Config can be given to both.
+// A value that does not parse yields ErrBadConfig. Values that cannot be
+// strings are passed as Option arguments: WithNATSOptions to NewClient and
+// WithLogger to New.
 //
 // # Metadata
 //
@@ -51,24 +53,24 @@
 // # Lifecycle
 //
 // A Client owns a NATS connection. NewClient returns a connected client, and
-// Close closes that connection; Close is idempotent. Request and Publish on
-// a client that has not connected return ErrNotConnected, and after Close
-// they return ErrClosed.
+// Close closes that connection; Close is idempotent. Request and Publish
+// after Close return ErrClosed.
 //
-// A Runtime holds one Client, available from Client in every state, that
-// owns the runtime's connection. Start connects it, subscribes every binding
-// on its connection, and flushes. Stop unsubscribes, waits for in-flight
-// handlers until its context is done, cancels the handlers' context,
-// flushes, and closes the client. It returns ctx.Err() when handlers were
-// abandoned. Start after Stop returns ErrStopped. Closing the runtime's
+// A Runtime is built from a Client the application constructed, and that
+// client is the runtime's connection. Runtime.Client returns it in every
+// state. Start subscribes every binding on the client's connection and
+// flushes; on a closed client it returns ErrClosed. Stop unsubscribes, waits
+// for in-flight handlers until its context is done, cancels the handlers'
+// context, flushes, and closes the client. It returns ctx.Err() when
+// handlers were abandoned. Start after Stop returns ErrStopped. Closing the
 // client directly ends the runtime's connection; Stop afterwards returns the
 // drain result.
 //
 // # Service map
 //
-// New and NewClient each take a mesh.ServiceMap. The runtime and the client
-// hold it and return it from ServiceMap; a client from Runtime.Client returns
-// the runtime's. Nothing here validates a target against it.
+// NewClient takes a mesh.ServiceMap. The client holds it and returns it from
+// ServiceMap, and a runtime's ServiceMap is its client's. Nothing here
+// validates a target against it.
 //
 // # Errors
 //

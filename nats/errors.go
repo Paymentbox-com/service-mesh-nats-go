@@ -6,19 +6,16 @@ import (
 	natsio "github.com/nats-io/nats.go"
 )
 
-// Errors this runtime defines beyond the three in the mesh contract.
+// Errors this package defines beyond the three in the mesh contract.
 var (
 	// ErrBadConfig is returned by New and NewClient when a configuration
 	// value, or a per-call option, cannot be parsed. It is wrapped with the
 	// key and value.
 	ErrBadConfig = errors.New("nats: bad configuration value")
 
-	// ErrNotConnected is returned by Request and Publish on a client that
-	// has no connection yet: a runtime's client before Start has succeeded.
-	ErrNotConnected = errors.New("nats: client is not connected")
-
-	// ErrClosed is returned by Request and Publish after Close. A runtime's
-	// client is closed by Stop.
+	// ErrClosed is returned by Request and Publish after Close, and by Start
+	// on a runtime whose client is closed. A runtime's Stop closes its
+	// client.
 	ErrClosed = errors.New("nats: client is closed")
 
 	// ErrAlreadyStarted is returned by Start on a running runtime.

@@ -46,41 +46,38 @@ func TestSubject(t *testing.T) {
 	}
 }
 
-func TestParseSettings(t *testing.T) {
+func TestParseRuntimeSettings(t *testing.T) {
 	cases := []struct {
 		name    string
 		cfg     mesh.Config
-		want    func(settings) bool
+		want    func(runtimeSettings) bool
 		wantErr error
 	}{
 		{
 			name: "defaults",
 			cfg:  mesh.Config{mesh.DeploymentGroupKey: "d"},
-			want: func(s settings) bool {
-				return s.connectTimeout == defaultConnectTimeout && s.requestTimeout == defaultRequestTimeout && s.concurrency > 0 && s.logger != nil
+			want: func(s runtimeSettings) bool {
+				return s.deploymentGroup == "d" && s.concurrency > 0 && s.logger != nil
 			},
 		},
 		{
 			name: "all keys parsed",
-			cfg: mesh.Config{
-				mesh.DeploymentGroupKey: "d", URLKey: "nats://x:1", NameKey: "n",
-				ConnectTimeoutKey: "1s", RequestTimeoutKey: "250ms", ConcurrencyKey: "3",
-			},
-			want: func(s settings) bool {
-				return s.url == "nats://x:1" && s.name == "n" && s.connectTimeout == time.Second &&
-					s.requestTimeout == 250*time.Millisecond && s.concurrency == 3 && s.deploymentGroup == "d"
-			},
+			cfg:  mesh.Config{mesh.DeploymentGroupKey: "d", ConcurrencyKey: "3"},
+			want: func(s runtimeSettings) bool { return s.deploymentGroup == "d" && s.concurrency == 3 },
+		},
+		{
+			name: "connection keys ignored",
+			cfg:  mesh.Config{mesh.DeploymentGroupKey: "d", URLKey: "nats://x:1", ConnectTimeoutKey: "soon", RequestTimeoutKey: "later"},
+			want: func(s runtimeSettings) bool { return s.deploymentGroup == "d" },
 		},
 		{name: "missing deployment group", cfg: mesh.Config{}, wantErr: mesh.ErrNoDeploymentGroup},
 		{name: "empty deployment group", cfg: mesh.Config{mesh.DeploymentGroupKey: ""}, wantErr: mesh.ErrNoDeploymentGroup},
-		{name: "bad duration", cfg: mesh.Config{mesh.DeploymentGroupKey: "d", RequestTimeoutKey: "soon"}, wantErr: ErrBadConfig},
-		{name: "zero duration", cfg: mesh.Config{mesh.DeploymentGroupKey: "d", ConnectTimeoutKey: "0s"}, wantErr: ErrBadConfig},
 		{name: "bad concurrency", cfg: mesh.Config{mesh.DeploymentGroupKey: "d", ConcurrencyKey: "many"}, wantErr: ErrBadConfig},
 		{name: "zero concurrency", cfg: mesh.Config{mesh.DeploymentGroupKey: "d", ConcurrencyKey: "0"}, wantErr: ErrBadConfig},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := parseSettings(tc.cfg, nil, true)
+			s, err := parseRuntimeSettings(tc.cfg, nil)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("want %v, got %v", tc.wantErr, err)
@@ -95,16 +92,66 @@ func TestParseSettings(t *testing.T) {
 			}
 		})
 	}
+}
 
-	t.Run("client does not require deployment group", func(t *testing.T) {
-		if _, err := parseSettings(mesh.Config{}, nil, false); err != nil {
-			t.Fatal(err)
-		}
-	})
+func TestParseClientSettings(t *testing.T) {
+	cases := []struct {
+		name    string
+		cfg     mesh.Config
+		want    func(clientSettings) bool
+		wantErr error
+	}{
+		{
+			name: "defaults",
+			cfg:  mesh.Config{},
+			want: func(s clientSettings) bool {
+				return s.connectTimeout == defaultConnectTimeout && s.requestTimeout == defaultRequestTimeout && s.url != ""
+			},
+		},
+		{
+			name: "all keys parsed",
+			cfg:  mesh.Config{URLKey: "nats://x:1", NameKey: "n", ConnectTimeoutKey: "1s", RequestTimeoutKey: "250ms"},
+			want: func(s clientSettings) bool {
+				return s.url == "nats://x:1" && s.name == "n" && s.connectTimeout == time.Second && s.requestTimeout == 250*time.Millisecond
+			},
+		},
+		{
+			name: "runtime keys ignored",
+			cfg:  mesh.Config{mesh.DeploymentGroupKey: "d", ConcurrencyKey: "many"},
+			want: func(s clientSettings) bool { return s.requestTimeout == defaultRequestTimeout },
+		},
+		{name: "bad duration", cfg: mesh.Config{RequestTimeoutKey: "soon"}, wantErr: ErrBadConfig},
+		{name: "zero duration", cfg: mesh.Config{ConnectTimeoutKey: "0s"}, wantErr: ErrBadConfig},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := parseClientSettings(tc.cfg, nil)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("want %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.want(s) {
+				t.Fatalf("settings not as expected: %+v", s)
+			}
+		})
+	}
+}
+
+func TestNew_NilClient(t *testing.T) {
+	_, err := New(nil, testConfig(""), nil, nil)
+	if err == nil {
+		t.Fatal("want error for nil client")
+	}
 }
 
 func TestNew_KindMismatch(t *testing.T) {
-	_, err := New(testConfig(""), mesh.ServiceMap{}, []mesh.Endpoint{{
+	c := testClient(t, testConfig(startServer(t)))
+	_, err := New(c, testConfig(""), []mesh.Endpoint{{
 		Target:  mesh.Target{Segments: []string{"a"}, Kind: mesh.KindTopic},
 		Handler: okEndpoint,
 	}}, nil)
@@ -112,7 +159,7 @@ func TestNew_KindMismatch(t *testing.T) {
 		t.Fatalf("endpoint on topic: want ErrKindMismatch, got %v", err)
 	}
 
-	_, err = New(testConfig(""), mesh.ServiceMap{}, nil, []mesh.Subscriber{{
+	_, err = New(c, testConfig(""), nil, []mesh.Subscriber{{
 		Target:  mesh.Target{Segments: []string{"a"}, Kind: mesh.KindRoute},
 		Handler: okSubscriber,
 	}})
@@ -122,7 +169,8 @@ func TestNew_KindMismatch(t *testing.T) {
 }
 
 func TestNew_InvalidTarget(t *testing.T) {
-	_, err := New(testConfig(""), mesh.ServiceMap{}, []mesh.Endpoint{{
+	c := testClient(t, testConfig(startServer(t)))
+	_, err := New(c, testConfig(""), []mesh.Endpoint{{
 		Target:  mesh.Target{Segments: []string{"a.b"}, Kind: mesh.KindRoute},
 		Handler: okEndpoint,
 	}}, nil)
@@ -132,7 +180,8 @@ func TestNew_InvalidTarget(t *testing.T) {
 }
 
 func TestNew_NilHandler(t *testing.T) {
-	_, err := New(testConfig(""), mesh.ServiceMap{}, []mesh.Endpoint{{
+	c := testClient(t, testConfig(startServer(t)))
+	_, err := New(c, testConfig(""), []mesh.Endpoint{{
 		Target: mesh.Target{Segments: []string{"a"}, Kind: mesh.KindRoute},
 	}}, nil)
 	if err == nil {
@@ -140,14 +189,20 @@ func TestNew_NilHandler(t *testing.T) {
 	}
 }
 
-func TestNew_ServiceMapKept(t *testing.T) {
+func TestRuntime_ServiceMapIsClients(t *testing.T) {
+	url := startServer(t)
 	sm := mesh.ServiceMap{Targets: []mesh.Target{echoTarget, eventTarget}}
-	r, err := New(testConfig(""), sm, nil, nil)
+	c, err := NewClient(testConfig(url), sm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	r, err := New(c, testConfig(""), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := r.ServiceMap(); len(got.Targets) != 2 || !got.Targets[0].Equal(echoTarget) {
-		t.Fatalf("ServiceMap not kept: %+v", got)
+		t.Fatalf("ServiceMap is not the client's: %+v", got)
 	}
 }
 
@@ -192,8 +247,9 @@ func TestConsumerGroupResolution(t *testing.T) {
 }
 
 func TestNew_BindingsUseConsumerGroup(t *testing.T) {
+	c := testClient(t, testConfig(startServer(t)))
 	cfg := mesh.Config{mesh.DeploymentGroupKey: "billing"}
-	r, err := New(cfg, mesh.ServiceMap{},
+	r, err := New(c, cfg,
 		[]mesh.Endpoint{{Target: echoTarget, Metadata: map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}, Handler: okEndpoint}},
 		[]mesh.Subscriber{{Target: eventTarget, Handler: okSubscriber}},
 	)
@@ -208,9 +264,8 @@ func TestNew_BindingsUseConsumerGroup(t *testing.T) {
 	}
 }
 
-func TestClient_ChecksBeforeConnection(t *testing.T) {
-	s, _ := parseSettings(testConfig(""), nil, true)
-	c := newClient(s, mesh.ServiceMap{})
+func TestClient_ChecksBeforeWire(t *testing.T) {
+	c := testClient(t, testConfig(startServer(t)))
 	ctx := context.Background()
 
 	_, err := c.Request(ctx, mesh.Message{Target: mesh.Target{Segments: []string{"a"}, Kind: mesh.KindTopic}}, nil)
@@ -231,24 +286,6 @@ func TestClient_ChecksBeforeConnection(t *testing.T) {
 	_, err = c.Request(ctx, mesh.Message{Target: echoTarget}, map[string]string{RequestTimeoutKey: "later"})
 	if !errors.Is(err, ErrBadConfig) {
 		t.Fatalf("Request with bad option: want ErrBadConfig, got %v", err)
-	}
-}
-
-func TestClient_Unconnected_Request(t *testing.T) {
-	s, _ := parseSettings(testConfig(""), nil, false)
-	c := newClient(s, mesh.ServiceMap{})
-	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
-	if !errors.Is(err, ErrNotConnected) {
-		t.Fatalf("want ErrNotConnected, got %v", err)
-	}
-}
-
-func TestClient_Unconnected_Publish(t *testing.T) {
-	s, _ := parseSettings(testConfig(""), nil, false)
-	c := newClient(s, mesh.ServiceMap{})
-	err := c.Publish(context.Background(), mesh.Message{Target: eventTarget}, nil)
-	if !errors.Is(err, ErrNotConnected) {
-		t.Fatalf("want ErrNotConnected, got %v", err)
 	}
 }
 

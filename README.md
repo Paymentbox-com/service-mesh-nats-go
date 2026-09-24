@@ -38,7 +38,10 @@ cfg := mesh.Config{
     mesh.DeploymentGroupKey: "demo",
 }
 
-rt, err := nats.New(cfg, sm,
+client, err := nats.NewClient(cfg, sm) // connects; reads url and the other connection keys
+if err != nil { /* nats.ErrBadConfig, or the nats.go connection error */ }
+
+rt, err := nats.New(client, cfg, // reads deployment_group and concurrency
     []mesh.Endpoint{{Target: echo, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
         return mesh.Message{Payload: m.Payload}, nil
     }}},
@@ -49,19 +52,19 @@ rt, err := nats.New(cfg, sm,
 )
 if err != nil { /* mesh.ErrNoDeploymentGroup, mesh.ErrKindMismatch, mesh.ErrInvalidTarget, nats.ErrBadConfig */ }
 
-if err := rt.Start(ctx); err != nil { /* connect or subscribe failure */ }
-defer rt.Stop(ctx) // closes rt.Client()
+if err := rt.Start(ctx); err != nil { /* subscribe failure, or nats.ErrClosed when client is closed */ }
+defer rt.Stop(ctx) // closes client
 
-c := rt.Client() // owns the runtime's connection; nats.ErrNotConnected before Start, nats.ErrClosed after Stop
-reply, err := c.Request(ctx, mesh.Message{Target: echo, Payload: []byte("hi")}, nil)
-err = c.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42")}, nil)
+reply, err := client.Request(ctx, mesh.Message{Target: echo, Payload: []byte("hi")}, nil)
+err = client.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42")}, nil)
 ```
 
-A process that only calls uses `nats.NewClient(cfg, sm)`, which returns a
-connected client, and closes it when done; `Request` and `Publish` after
-`Close` return `nats.ErrClosed`. `rt.ServiceMap()`, `rt.Client().ServiceMap()`,
-and a standalone client's `ServiceMap()` return the map each was built with;
-the transport does not validate targets against it. `examples/echo` is a single-process version of the above.
+The client is the runtime's connection. `rt.Client()` returns it in every
+state, and `Request` and `Publish` on it after `Stop` return `nats.ErrClosed`.
+A process that only calls uses `nats.NewClient(cfg, sm)` on its own and
+closes it when done. `client.ServiceMap()` and `rt.ServiceMap()` return the
+map the client was built with; the transport does not validate targets
+against it. `examples/echo` is a single-process version of the above.
 `examples/server` and `examples/client` split it across two processes;
 `E2E.md` walks through them.
 
@@ -79,7 +82,11 @@ for up to ten seconds.
 func main() {
     cfg := mesh.Config{nats.URLKey: os.Getenv("NATS_URL"), mesh.DeploymentGroupKey: "demo"}
 
-    rt, err := nats.New(cfg, sm,
+    client, err := nats.NewClient(cfg, sm)
+    if err != nil {
+        log.Fatal(err)
+    }
+    rt, err := nats.New(client, cfg,
         []mesh.Endpoint{{Target: echo, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
             return mesh.Message{Payload: m.Payload}, nil
         }}},
@@ -101,7 +108,7 @@ func main() {
 
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // drain budget
     defer cancel()
-    if err := rt.Stop(ctx); err != nil {
+    if err := rt.Stop(ctx); err != nil { // closes client
         log.Printf("stop: %v", err) // handlers were abandoned
     }
 }
@@ -147,6 +154,7 @@ if err := c.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42
 
 Two deployments on one topic each handle every event once. A subscriber
 with `consumer_group` set to `none` handles every event on every instance.
+Each runtime is built from its own client, since a client is one connection.
 
 ```go
 onCreated := func(ctx context.Context, m mesh.Message) error {
@@ -154,11 +162,25 @@ onCreated := func(ctx context.Context, m mesh.Message) error {
     return nil
 }
 
+// serve builds a client and a runtime for one deployment group.
+serve := func(group string, sub mesh.Subscriber) *nats.Runtime {
+    cfg := mesh.Config{nats.URLKey: url, mesh.DeploymentGroupKey: group}
+    client, err := nats.NewClient(cfg, sm)
+    if err != nil {
+        log.Fatal(err)
+    }
+    rt, err := nats.New(client, cfg, nil, []mesh.Subscriber{sub})
+    if err != nil {
+        log.Fatal(err)
+    }
+    return rt
+}
+
 // billing and audit each run this subscriber under their own
 // deployment_group, so every event is handled once per deployment.
 sub := mesh.Subscriber{Target: created, Handler: onCreated}
-billing, _ := nats.New(mesh.Config{nats.URLKey: url, mesh.DeploymentGroupKey: "billing"}, sm, nil, []mesh.Subscriber{sub})
-audit, _ := nats.New(mesh.Config{nats.URLKey: url, mesh.DeploymentGroupKey: "audit"}, sm, nil, []mesh.Subscriber{sub})
+billing := serve("billing", sub)
+audit := serve("audit", sub)
 
 // Every instance of a deployment handles every event: no group at all.
 broadcast := mesh.Subscriber{
@@ -166,7 +188,7 @@ broadcast := mesh.Subscriber{
     Metadata: map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone},
     Handler:  onCreated,
 }
-cache, _ := nats.New(mesh.Config{nats.URLKey: url, mesh.DeploymentGroupKey: "cache"}, sm, nil, []mesh.Subscriber{broadcast})
+cache := serve("cache", broadcast)
 
 for _, rt := range []*nats.Runtime{billing, audit, cache} {
     if err := rt.Start(ctx); err != nil {
@@ -185,20 +207,23 @@ The specification leaves these to each transport. Full detail is in the
 non-empty and free of `.`, `*`, `>`, whitespace, and non-printable
 characters. Targets are literal; no wildcards.
 
-**Configuration.** All values are strings. Beyond `deployment_group` the
-keys are:
+**Configuration.** All values are strings. `NewClient` reads the connection
+keys and `New` reads `deployment_group`, which is required, and
+`concurrency`. Each constructor ignores the other's keys, so one `Config`
+can be given to both.
 
-| key               | default            | meaning                                            |
-|-------------------|--------------------|----------------------------------------------------|
-| `url`             | `nats.DefaultURL`  | server URL or comma-separated list                 |
-| `name`            | none               | connection name reported to the server             |
-| `connect_timeout` | `5s`               | bound on the initial connection, Go duration       |
-| `request_timeout` | `30s`              | bound on `Request` when ctx has no deadline, Go duration; also accepted as a per-call option |
-| `concurrency`     | CPU count          | max handlers running at once                       |
+| key                | read by     | default            | meaning                                            |
+|--------------------|-------------|--------------------|----------------------------------------------------|
+| `url`              | `NewClient` | `nats.DefaultURL`  | server URL or comma-separated list                 |
+| `name`             | `NewClient` | none               | connection name reported to the server             |
+| `connect_timeout`  | `NewClient` | `5s`               | bound on the initial connection, Go duration       |
+| `request_timeout`  | `NewClient` | `30s`              | bound on `Request` when ctx has no deadline, Go duration; also accepted as a per-call option |
+| `deployment_group` | `New`       | required           | the queue group bindings join                      |
+| `concurrency`      | `New`       | CPU count          | max handlers running at once                       |
 
-A value that does not parse yields `ErrBadConfig`. A logger and extra
-nats.go connection options are passed as `nats.WithLogger` and
-`nats.WithNATSOptions`. The package re-exports `ErrNoResponders` and
+A value that does not parse yields `ErrBadConfig`. Extra nats.go connection
+options are passed to `NewClient` as `nats.WithNATSOptions`, and a logger to
+`New` as `nats.WithLogger`. The package re-exports `ErrNoResponders` and
 `ErrTimeout` from nats.go so callers need not import it.
 
 **Metadata.** Message metadata rides as NATS headers, one value per key. The
@@ -227,20 +252,24 @@ bindings. Beyond that, deliveries wait in nats.go's pending buffer.
 
 **Lifecycle.** A `Client` owns a NATS connection. `NewClient` returns a
 connected one, and its `Close` closes the connection; `Close` is idempotent.
-A runtime holds one `Client`, returned by `Runtime.Client()` in every state,
-that owns the runtime's connection. `Start` connects it, subscribes every
-binding on its connection, and flushes. `Stop` unsubscribes, waits for
-in-flight handlers until its context is done, cancels the handlers' context,
-flushes, and closes the client; it returns the context's error when handlers
-were abandoned. The specification's drain in seconds is the context's
-deadline. A runtime does not restart. Closing the runtime's client directly
-ends the runtime's connection; `Stop` afterwards returns the drain result.
+A `Runtime` is built from a `Client` the application constructed, and that
+client is the runtime's connection. `New` takes a `*nats.Client`, not a
+`mesh.Client`, because the runtime subscribes through the NATS connection the
+client owns. `Runtime.Client()` returns it in every state, and
+`Runtime.ServiceMap()` is the client's. `Start` subscribes every binding on
+the client's connection and flushes; on a closed client it returns
+`ErrClosed`, and a subscribe or flush failure leaves the runtime and the
+client as they were. `Stop` unsubscribes, waits for in-flight handlers until
+its context is done, cancels the handlers' context, flushes, and closes the
+client; it returns the context's error when handlers were abandoned. The
+specification's drain in seconds is the context's deadline. A runtime does
+not restart. Closing the client directly ends the runtime's connection;
+`Stop` afterwards returns the drain result.
 
-**Errors.** The package defines `ErrBadConfig`, `ErrAlreadyStarted`, `ErrStopped`, `ErrNotConnected` (a `Request` or
-`Publish` on a client that has not connected, which is a runtime's client
-before `Start`), `ErrClosed` (a `Request` or `Publish` after `Close`, which
-for a runtime's client is after `Stop`), and `*HandlerError`. The three
-contract errors come from `mesh`.
+**Errors.** The package defines `ErrBadConfig`, `ErrAlreadyStarted`,
+`ErrStopped`, `ErrClosed` (a `Request` or `Publish` after `Close`, which for
+a runtime's client is after `Stop`, and a `Start` on a runtime whose client
+is closed), and `*HandlerError`. The three contract errors come from `mesh`.
 
 **Transport errors.** nats.go errors come back unchanged, most often
 `nats.ErrNoResponders` and `nats.ErrTimeout`.
