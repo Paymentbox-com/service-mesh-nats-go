@@ -50,17 +50,18 @@ rt, err := nats.New(cfg, sm,
 if err != nil { /* mesh.ErrNoDeploymentGroup, mesh.ErrKindMismatch, mesh.ErrInvalidTarget, nats.ErrBadConfig, nats.ErrDuplicateTarget */ }
 
 if err := rt.Start(ctx); err != nil { /* connect or subscribe failure */ }
-defer rt.Stop(ctx)
+defer rt.Stop(ctx) // closes rt.Client()
 
-c := rt.Client()
+c := rt.Client() // owns the runtime's connection; nats.ErrNotConnected before Start, nats.ErrClosed after Stop
 reply, err := c.Request(ctx, mesh.Message{Target: echo, Payload: []byte("hi")}, nil)
 err = c.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42")}, nil)
 ```
 
-A process that only calls uses `nats.NewClient(cfg, sm)` and closes it when
-done. `rt.ServiceMap()`, `rt.Client().ServiceMap()`, and a standalone
-client's `ServiceMap()` return the map each was built with; the transport
-does not validate targets against it. `examples/echo` is a single-process version of the above.
+A process that only calls uses `nats.NewClient(cfg, sm)`, which returns a
+connected client, and closes it when done; `Request` and `Publish` after
+`Close` return `nats.ErrClosed`. `rt.ServiceMap()`, `rt.Client().ServiceMap()`,
+and a standalone client's `ServiceMap()` return the map each was built with;
+the transport does not validate targets against it. `examples/echo` is a single-process version of the above.
 `examples/server` and `examples/client` split it across two processes;
 `E2E.md` walks through them.
 
@@ -132,6 +133,7 @@ case err == nil:
 case errors.Is(err, mesh.ErrKindMismatch): // a topic target given to Request
 case errors.Is(err, nats.ErrNoResponders): // nothing serves demo.echo
 case errors.Is(err, nats.ErrTimeout):      // no reply within request_timeout
+case errors.Is(err, nats.ErrClosed):       // c.Close has run
 case errors.As(err, &he):                  // the handler failed: he.Text
 default:                                   // any other nats.go error, unchanged
 }
@@ -222,13 +224,23 @@ cancellation is reported as the context's own error.
 **Concurrency.** At most `concurrency` handlers run at once across all
 bindings. Beyond that, deliveries wait in nats.go's pending buffer.
 
-**Lifecycle.** `Start` connects, subscribes, and flushes. `Stop` unsubscribes,
-waits for in-flight handlers until its context is done, cancels the handlers'
-context, flushes, and closes; it returns the context's error when handlers
+**Lifecycle.** A `Client` owns a NATS connection. `NewClient` returns a
+connected one, and its `Close` closes the connection; `Close` is idempotent.
+A runtime holds one `Client`, returned by `Runtime.Client()` in every state,
+that owns the runtime's connection. `Start` connects it, subscribes every
+binding on its connection, and flushes. `Stop` unsubscribes, waits for
+in-flight handlers until its context is done, cancels the handlers' context,
+flushes, and closes the client; it returns the context's error when handlers
 were abandoned. The specification's drain in seconds is the context's
-deadline. A runtime does not restart. `Runtime.Client()` shares the
-connection; its `Close` is a no-op and it returns `ErrNotRunning` outside the
-running window.
+deadline. A runtime does not restart. Closing the runtime's client directly
+ends the runtime's connection; `Stop` afterwards returns the drain result.
+
+**Errors.** The package defines `ErrBadConfig`, `ErrDuplicateTarget`,
+`ErrAlreadyStarted`, `ErrStopped`, `ErrNotConnected` (a `Request` or
+`Publish` on a client that has not connected, which is a runtime's client
+before `Start`), `ErrClosed` (a `Request` or `Publish` after `Close`, which
+for a runtime's client is after `Stop`), and `*HandlerError`. The three
+contract errors come from `mesh`.
 
 **Transport errors.** nats.go errors come back unchanged, most often
 `nats.ErrNoResponders` and `nats.ErrTimeout`.

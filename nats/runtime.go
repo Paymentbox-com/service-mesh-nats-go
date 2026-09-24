@@ -40,9 +40,8 @@ type Runtime struct {
 	bindings   []binding
 	client     *Client
 
-	mu    sync.Mutex // guards state, nc, subs, and the lifecycle methods
+	mu    sync.Mutex // guards state, subs, and the lifecycle methods
 	state runtimeState
-	nc    *natsio.Conn
 	subs  []*natsio.Subscription
 
 	running atomic.Bool
@@ -71,7 +70,7 @@ func New(cfg mesh.Config, serviceMap mesh.ServiceMap, endpoints []mesh.Endpoint,
 	r := &Runtime{
 		settings:   s,
 		serviceMap: serviceMap,
-		client:     newSharedClient(s, serviceMap),
+		client:     newClient(s, serviceMap),
 		sem:        make(chan struct{}, s.concurrency),
 	}
 
@@ -126,8 +125,10 @@ func (r *Runtime) ServiceMap() mesh.ServiceMap {
 	return r.serviceMap
 }
 
-// Client returns a client sharing this runtime's connection. Its Request and
-// Publish return ErrNotRunning while the runtime is not running.
+// Client returns the client that owns this runtime's connection. It is the
+// same client in every state. Its Request and Publish return ErrNotConnected
+// before Start has succeeded and ErrClosed after Stop. Closing it directly
+// ends the runtime's connection.
 func (r *Runtime) Client() mesh.Client {
 	return r.client
 }
@@ -137,8 +138,11 @@ func (r *Runtime) Running() bool {
 	return r.running.Load()
 }
 
-// Start connects, subscribes every binding, and begins receiving. It returns
-// ErrAlreadyStarted on a running runtime and ErrStopped after Stop.
+// Start connects the runtime's client, subscribes every binding on its
+// connection, and begins receiving. It returns ErrAlreadyStarted on a running
+// runtime and ErrStopped after Stop. A connection failure leaves the runtime
+// as it was. A subscribe or flush failure closes the client, so a later Start
+// returns ErrClosed.
 func (r *Runtime) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -153,7 +157,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 
-	nc, err := r.settings.connect()
+	if err := r.client.connect(); err != nil {
+		return err
+	}
+	nc, err := r.client.connection()
 	if err != nil {
 		return err
 	}
@@ -169,7 +176,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 			_ = s.Unsubscribe()
 		}
 		r.cancelHandlers()
-		nc.Close()
+		_ = r.client.Close()
 		return err
 	}
 
@@ -195,18 +202,17 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fail(err)
 	}
 
-	r.nc = nc
 	r.subs = subs
-	r.client.nc.Store(nc)
 	r.state = stateRunning
 	r.running.Store(true)
 	return nil
 }
 
 // Stop stops receiving, waits for in-flight handlers until ctx is done,
-// cancels the handlers' context, flushes, and closes. It returns ctx.Err()
-// when handlers were abandoned. Stop on a runtime that is not running does
-// nothing.
+// cancels the handlers' context, flushes, and closes the runtime's client.
+// It returns ctx.Err() when handlers were abandoned. Stop on a runtime that
+// is not running does nothing. When the client was closed directly, Stop
+// skips the flush and returns the drain result.
 func (r *Runtime) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -216,7 +222,6 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	}
 	r.state = stateStopped
 	r.running.Store(false)
-	r.client.nc.Store(nil)
 
 	for _, s := range r.subs {
 		_ = s.Unsubscribe()
@@ -239,14 +244,13 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	}
 	r.cancelHandlers()
 
-	if drainErr == nil {
-		if err := flush(ctx, r.nc, flushBudget); err != nil {
+	if nc, err := r.client.connection(); err == nil && drainErr == nil {
+		if err := flush(ctx, nc, flushBudget); err != nil {
 			r.settings.logger.Warn("nats: flush during stop failed", "error", err)
 		}
 	}
 
-	r.nc.Close()
-	r.nc = nil
+	_ = r.client.Close()
 	r.subs = nil
 	return drainErr
 }

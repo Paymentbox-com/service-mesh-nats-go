@@ -66,7 +66,8 @@ func startRuntime(t *testing.T, cfg mesh.Config, endpoints []mesh.Endpoint, subs
 	return r
 }
 
-func newClient(t *testing.T, cfg mesh.Config) *Client {
+// testClient is a connected standalone client closed at cleanup.
+func testClient(t *testing.T, cfg mesh.Config) *Client {
 	t.Helper()
 	c, err := NewClient(cfg, mesh.ServiceMap{})
 	if err != nil {

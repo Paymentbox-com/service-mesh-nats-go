@@ -13,9 +13,13 @@ var (
 	// key and value.
 	ErrBadConfig = errors.New("nats: bad configuration value")
 
-	// ErrNotRunning is returned by a runtime-owned client's Request or Publish
-	// before Start has succeeded or after Stop.
-	ErrNotRunning = errors.New("nats: runtime is not running")
+	// ErrNotConnected is returned by Request and Publish on a client that
+	// has no connection yet: a runtime's client before Start has succeeded.
+	ErrNotConnected = errors.New("nats: client is not connected")
+
+	// ErrClosed is returned by Request and Publish after Close. A runtime's
+	// client is closed by Stop.
+	ErrClosed = errors.New("nats: client is closed")
 
 	// ErrAlreadyStarted is returned by Start on a running runtime.
 	ErrAlreadyStarted = errors.New("nats: runtime already started")

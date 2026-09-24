@@ -31,7 +31,7 @@ func TestRequest_RoundTrip(t *testing.T) {
 	}}
 	startRuntime(t, testConfig(url), []mesh.Endpoint{echo}, nil)
 
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 	reply, err := c.Request(context.Background(), mesh.Message{
 		Target:   echoTarget,
 		Metadata: map[string]string{"Request-Key": "request-value"},
@@ -62,7 +62,7 @@ func TestRequest_EmptyPayloadAndNoMetadata(t *testing.T) {
 	url := startServer(t)
 	startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
 
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 	reply, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestRequest_EmptyPayloadAndNoMetadata(t *testing.T) {
 
 func TestRequest_NoResponders(t *testing.T) {
 	url := startServer(t)
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 
 	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
 	if !errors.Is(err, natsio.ErrNoResponders) {
@@ -94,7 +94,7 @@ func TestRequest_HandlerError(t *testing.T) {
 			panic("kaboom")
 		}},
 	}, nil, WithLogger(quietLogger()))
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 
 	_, err := c.Request(context.Background(), mesh.Message{Target: failing}, nil)
 	var he *HandlerError
@@ -121,7 +121,7 @@ func TestRequest_Timeouts(t *testing.T) {
 
 	cfg := testConfig(url)
 	cfg[RequestTimeoutKey] = "100ms"
-	c := newClient(t, cfg)
+	c := testClient(t, cfg)
 
 	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
 	if !errors.Is(err, natsio.ErrTimeout) {
@@ -156,7 +156,7 @@ func TestPublish_Subscriber(t *testing.T) {
 		got <- m
 		return nil
 	}}})
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 
 	err := c.Publish(context.Background(), mesh.Message{
 		Target:   eventTarget,
@@ -179,7 +179,7 @@ func TestPublish_Subscriber(t *testing.T) {
 
 func TestPublish_CancelledContext(t *testing.T) {
 	url := startServer(t)
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := c.Publish(ctx, mesh.Message{Target: eventTarget}, nil); !errors.Is(err, context.Canceled) {
@@ -213,7 +213,7 @@ func TestPublish_ConsumerGroups(t *testing.T) {
 				}}
 				startRuntime(t, mesh.Config{URLKey: url, mesh.DeploymentGroupKey: tc.groups[i]}, nil, []mesh.Subscriber{sub})
 			}
-			c := newClient(t, testConfig(url))
+			c := testClient(t, testConfig(url))
 
 			if err := c.Publish(context.Background(), mesh.Message{Target: eventTarget}, nil); err != nil {
 				t.Fatal(err)
@@ -238,44 +238,60 @@ func TestPublish_ConsumerGroupOnTarget(t *testing.T) {
 			return nil
 		}}})
 	}
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 	if err := c.Publish(context.Background(), mesh.Message{Target: eventTarget}, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return received.Load() >= 2 })
 }
 
-func TestRuntimeClient_NotRunning(t *testing.T) {
+func TestRuntime_ClientSameBeforeAndAfterStart(t *testing.T) {
 	url := startServer(t)
-	r, err := New(testConfig(url), mesh.ServiceMap{}, []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	r, err := New(testConfig(url), mesh.ServiceMap{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := r.Client()
-	req := mesh.Message{Target: echoTarget}
-
-	if _, err := c.Request(context.Background(), req, nil); !errors.Is(err, ErrNotRunning) {
-		t.Fatalf("before Start: want ErrNotRunning, got %v", err)
-	}
-
+	before := r.Client()
 	if err := r.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Request(context.Background(), req, nil); err != nil {
+	t.Cleanup(func() { _ = r.Stop(context.Background()) })
+	if r.Client() != before {
+		t.Fatal("Client after Start is a different client")
+	}
+	if _, err := before.Request(context.Background(), mesh.Message{Target: echoTarget}, nil); !errors.Is(err, natsio.ErrNoResponders) {
+		t.Fatalf("Request on the client from before Start: want ErrNoResponders, got %v", err)
+	}
+}
+
+func TestStop_ClosesClient(t *testing.T) {
+	url := startServer(t)
+	r := startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	c := r.Client()
+	if _, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil); err != nil {
 		t.Fatalf("while running: %v", err)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Request(context.Background(), req, nil); err != nil {
-		t.Fatalf("Close on a shared client must not close the connection: %v", err)
 	}
 
 	if err := r.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Request(context.Background(), req, nil); !errors.Is(err, ErrNotRunning) {
-		t.Fatalf("after Stop: want ErrNotRunning, got %v", err)
+	if _, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil); !errors.Is(err, ErrClosed) {
+		t.Fatalf("after Stop: want ErrClosed, got %v", err)
+	}
+}
+
+func TestStop_AfterClientClosedDirectly(t *testing.T) {
+	url := startServer(t)
+	r := startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	if err := r.Client().Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop after the client was closed: want nil, got %v", err)
+	}
+	if r.Running() {
+		t.Fatal("Running after Stop")
 	}
 }
 
@@ -339,7 +355,7 @@ func TestStop_DrainsInFlightHandler(t *testing.T) {
 		<-release
 		return mesh.Message{Payload: []byte("done")}, nil
 	}}}, nil)
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 
 	replies := make(chan error, 1)
 	go func() {
@@ -383,7 +399,7 @@ func TestStop_DeadlineCancelsHandlers(t *testing.T) {
 		close(cancelled)
 		return mesh.Message{}, ctx.Err()
 	}}}, nil, WithLogger(quietLogger()))
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 
 	go func() { _, _ = c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil) }()
 	<-entered
@@ -419,7 +435,7 @@ func TestConcurrencyBound(t *testing.T) {
 		inFlight.Add(-1)
 		return m, nil
 	}}}, nil)
-	c := newClient(t, testConfig(url))
+	c := testClient(t, testConfig(url))
 
 	var wg sync.WaitGroup
 	errs := make(chan error, requests)

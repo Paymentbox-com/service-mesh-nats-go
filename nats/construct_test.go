@@ -224,7 +224,7 @@ func TestNew_BindingsUseConsumerGroup(t *testing.T) {
 
 func TestClient_ChecksBeforeConnection(t *testing.T) {
 	s, _ := parseSettings(testConfig(""), nil, true)
-	c := newSharedClient(s, mesh.ServiceMap{})
+	c := newClient(s, mesh.ServiceMap{})
 	ctx := context.Background()
 
 	_, err := c.Request(ctx, mesh.Message{Target: mesh.Target{Segments: []string{"a"}, Kind: mesh.KindTopic}}, nil)
@@ -246,9 +246,51 @@ func TestClient_ChecksBeforeConnection(t *testing.T) {
 	if !errors.Is(err, ErrBadConfig) {
 		t.Fatalf("Request with bad option: want ErrBadConfig, got %v", err)
 	}
+}
 
-	_, err = c.Request(ctx, mesh.Message{Target: echoTarget}, nil)
-	if !errors.Is(err, ErrNotRunning) {
-		t.Fatalf("Request with no connection: want ErrNotRunning, got %v", err)
+func TestClient_Unconnected_Request(t *testing.T) {
+	s, _ := parseSettings(testConfig(""), nil, false)
+	c := newClient(s, mesh.ServiceMap{})
+	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("want ErrNotConnected, got %v", err)
+	}
+}
+
+func TestClient_Unconnected_Publish(t *testing.T) {
+	s, _ := parseSettings(testConfig(""), nil, false)
+	c := newClient(s, mesh.ServiceMap{})
+	err := c.Publish(context.Background(), mesh.Message{Target: eventTarget}, nil)
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("want ErrNotConnected, got %v", err)
+	}
+}
+
+func TestClient_CloseTwice(t *testing.T) {
+	url := startServer(t)
+	c, err := NewClient(testConfig(url), mesh.ServiceMap{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestClient_RequestAfterClose(t *testing.T) {
+	url := startServer(t)
+	c, err := NewClient(testConfig(url), mesh.ServiceMap{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("want ErrClosed, got %v", err)
 	}
 }

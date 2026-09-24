@@ -52,8 +52,8 @@ vuln:
     {{go}} run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 # There is no .golangci.yml, so lint runs golangci-lint's default linters. CI
-# installs golangci-lint through its GitHub action rather than with `go run`,
-# so the two can differ by a release.
+# installs golangci-lint through its GitHub action and this recipe uses
+# `go run`, so the two can differ by a release.
 
 # Report lint findings (matches CI)
 [group('checks')]

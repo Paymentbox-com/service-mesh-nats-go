@@ -49,14 +49,19 @@
 //
 // # Lifecycle
 //
-// Start connects, subscribes, and flushes. Stop unsubscribes, waits for
-// in-flight handlers until its context is done, cancels the handlers'
-// context, flushes, and closes. It returns ctx.Err() when handlers were
-// abandoned. Start after Stop returns ErrStopped.
+// A Client owns a NATS connection. NewClient returns a connected client, and
+// Close closes that connection; Close is idempotent. Request and Publish on
+// a client that has not connected return ErrNotConnected, and after Close
+// they return ErrClosed.
 //
-// Client returns a client sharing the runtime's connection. Its Close is a
-// no-op, and its Request and Publish return ErrNotRunning outside the running
-// window.
+// A Runtime holds one Client, available from Client in every state, that
+// owns the runtime's connection. Start connects it, subscribes every binding
+// on its connection, and flushes. Stop unsubscribes, waits for in-flight
+// handlers until its context is done, cancels the handlers' context,
+// flushes, and closes the client. It returns ctx.Err() when handlers were
+// abandoned. Start after Stop returns ErrStopped. Closing the runtime's
+// client directly ends the runtime's connection; Stop afterwards returns the
+// drain result.
 //
 // # Service map
 //

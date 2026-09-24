@@ -4,22 +4,24 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	natsio "github.com/nats-io/nats.go"
 
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
-// Client implements mesh.Client over a NATS connection.
+// Client implements mesh.Client over a NATS connection it owns. A client is
+// unconnected, connected, or closed. NewClient returns a connected client. A
+// Runtime builds an unconnected client, connects it in Start, and closes it
+// in Stop.
 type Client struct {
-	nc             atomic.Pointer[natsio.Conn]
-	serviceMap     mesh.ServiceMap
-	requestTimeout time.Duration
-	ownsConn       bool
-	subjects       sync.Map // targetKey -> string
-	closeOnce      sync.Once
+	settings   settings
+	serviceMap mesh.ServiceMap
+	subjects   sync.Map // targetKey -> string
+
+	mu     sync.Mutex // guards nc and closed
+	nc     *natsio.Conn
+	closed bool
 }
 
 var _ mesh.Client = (*Client)(nil)
@@ -31,19 +33,35 @@ func NewClient(cfg mesh.Config, serviceMap mesh.ServiceMap, opts ...Option) (*Cl
 	if err != nil {
 		return nil, err
 	}
-	nc, err := s.connect()
-	if err != nil {
+	c := newClient(s, serviceMap)
+	if err := c.connect(); err != nil {
 		return nil, err
 	}
-	c := &Client{serviceMap: serviceMap, requestTimeout: s.requestTimeout, ownsConn: true}
-	c.nc.Store(nc)
 	return c, nil
 }
 
-// newSharedClient returns a client whose connection a Runtime sets and
-// clears. Its Close is a no-op.
-func newSharedClient(s settings, serviceMap mesh.ServiceMap) *Client {
-	return &Client{serviceMap: serviceMap, requestTimeout: s.requestTimeout}
+// newClient returns an unconnected client.
+func newClient(s settings, serviceMap mesh.ServiceMap) *Client {
+	return &Client{settings: s, serviceMap: serviceMap}
+}
+
+// connect opens the connection. On a connected client it returns nil; after
+// Close it returns ErrClosed.
+func (c *Client) connect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return ErrClosed
+	}
+	if c.nc != nil {
+		return nil
+	}
+	nc, err := c.settings.connect()
+	if err != nil {
+		return err
+	}
+	c.nc = nc
+	return nil
 }
 
 // ServiceMap returns the map this client was built with: the one given to
@@ -67,7 +85,7 @@ func (c *Client) Request(ctx context.Context, msg mesh.Message, opts map[string]
 	if err != nil {
 		return mesh.Message{}, err
 	}
-	timeout, err := durationSetting(opts, RequestTimeoutKey, c.requestTimeout)
+	timeout, err := durationSetting(opts, RequestTimeoutKey, c.settings.requestTimeout)
 	if err != nil {
 		return mesh.Message{}, err
 	}
@@ -135,26 +153,32 @@ func (c *Client) Publish(ctx context.Context, msg mesh.Message, opts map[string]
 	})
 }
 
-// Close releases the connection when this client owns it. For a client
-// obtained from a Runtime it does nothing.
+// Close closes the connection when one is open and marks the client closed.
+// It is idempotent and always returns nil. For a client from Runtime.Client
+// this ends the runtime's connection.
 func (c *Client) Close() error {
-	if !c.ownsConn {
-		return nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	if c.nc != nil {
+		c.nc.Close()
+		c.nc = nil
 	}
-	c.closeOnce.Do(func() {
-		if nc := c.nc.Swap(nil); nc != nil {
-			nc.Close()
-		}
-	})
 	return nil
 }
 
+// connection returns the open connection, ErrClosed after Close, or
+// ErrNotConnected before connect.
 func (c *Client) connection() (*natsio.Conn, error) {
-	nc := c.nc.Load()
-	if nc == nil {
-		return nil, ErrNotRunning
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case c.closed:
+		return nil, ErrClosed
+	case c.nc == nil:
+		return nil, ErrNotConnected
 	}
-	return nc, nil
+	return c.nc, nil
 }
 
 // subject assembles and validates a target once, then serves it from cache.
