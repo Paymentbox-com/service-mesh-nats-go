@@ -67,15 +67,3 @@ func consumerGroup(binding, target map[string]string, deploymentGroup string) st
 	}
 	return deploymentGroup
 }
-
-// targetKey builds a cache key from a target's identity. It is built before
-// validation, so the separator is one no valid segment can contain.
-func targetKey(t mesh.Target) string {
-	var b strings.Builder
-	b.WriteByte(byte(t.Kind))
-	for _, s := range t.Segments {
-		b.WriteByte(0)
-		b.WriteString(s)
-	}
-	return b.String()
-}

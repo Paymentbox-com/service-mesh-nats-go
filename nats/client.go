@@ -17,7 +17,6 @@ import (
 type Client struct {
 	settings   settings
 	serviceMap mesh.ServiceMap
-	subjects   sync.Map // targetKey -> string
 
 	mu     sync.Mutex // guards nc and closed
 	nc     *natsio.Conn
@@ -81,7 +80,7 @@ func (c *Client) Request(ctx context.Context, msg mesh.Message, opts map[string]
 	if err := checkKind(msg.Target, mesh.KindRoute, "Request"); err != nil {
 		return mesh.Message{}, err
 	}
-	subj, err := c.subject(msg.Target)
+	subj, err := subject(msg.Target)
 	if err != nil {
 		return mesh.Message{}, err
 	}
@@ -135,7 +134,7 @@ func (c *Client) Publish(ctx context.Context, msg mesh.Message, opts map[string]
 	if err := checkKind(msg.Target, mesh.KindTopic, "Publish"); err != nil {
 		return err
 	}
-	subj, err := c.subject(msg.Target)
+	subj, err := subject(msg.Target)
 	if err != nil {
 		return err
 	}
@@ -179,18 +178,4 @@ func (c *Client) connection() (*natsio.Conn, error) {
 		return nil, ErrNotConnected
 	}
 	return c.nc, nil
-}
-
-// subject assembles and validates a target once, then serves it from cache.
-func (c *Client) subject(t mesh.Target) (string, error) {
-	key := targetKey(t)
-	if s, ok := c.subjects.Load(key); ok {
-		return s.(string), nil
-	}
-	s, err := subject(t)
-	if err != nil {
-		return "", err
-	}
-	c.subjects.Store(key, s)
-	return s, nil
 }
