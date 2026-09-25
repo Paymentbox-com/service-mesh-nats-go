@@ -13,9 +13,8 @@
 // keys URLKey, NameKey, ConnectTimeoutKey, and RequestTimeoutKey. New reads
 // mesh.DeploymentGroupKey, which is required, and ConcurrencyKey. Each
 // constructor ignores the other's keys, so one Config can be given to both.
-// A value that does not parse yields ErrBadConfig. Values that cannot be
-// strings are passed as Option arguments: WithNATSOptions to NewClient and
-// WithLogger to New.
+// A value that does not parse yields ErrBadConfig. A logger is passed to New
+// as WithLogger.
 //
 // # Metadata
 //

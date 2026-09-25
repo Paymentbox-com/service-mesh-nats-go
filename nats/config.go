@@ -47,8 +47,7 @@ const (
 )
 
 // Option carries a setting that cannot be expressed as a string in a
-// mesh.Config. New reads WithLogger and NewClient reads WithNATSOptions; each
-// constructor ignores the other's option.
+// mesh.Config. New reads WithLogger.
 type Option func(*options)
 
 // WithLogger sets the logger that receives handler failures and reply or
@@ -57,15 +56,8 @@ func WithLogger(l *slog.Logger) Option {
 	return func(o *options) { o.logger = l }
 }
 
-// WithNATSOptions appends options to the natsio.Connect call, after the ones
-// derived from the mesh.Config, so they can override them.
-func WithNATSOptions(opts ...natsio.Option) Option {
-	return func(o *options) { o.natsOpts = append(o.natsOpts, opts...) }
-}
-
 type options struct {
-	logger   *slog.Logger
-	natsOpts []natsio.Option
+	logger *slog.Logger
 }
 
 func applyOptions(opts []Option) options {
@@ -76,21 +68,19 @@ func applyOptions(opts []Option) options {
 	return o
 }
 
-// clientSettings is what NewClient reads from a mesh.Config and Options.
+// clientSettings is what NewClient reads from a mesh.Config.
 type clientSettings struct {
 	url            string
 	name           string
 	connectTimeout time.Duration
 	requestTimeout time.Duration
-	natsOpts       []natsio.Option
 }
 
-func parseClientSettings(cfg mesh.Config, opts []Option) (clientSettings, error) {
+func parseClientSettings(cfg mesh.Config) (clientSettings, error) {
 	s := clientSettings{
 		url:            natsio.DefaultURL,
 		connectTimeout: defaultConnectTimeout,
 		requestTimeout: defaultRequestTimeout,
-		natsOpts:       applyOptions(opts).natsOpts,
 	}
 	if v, ok := cfg[URLKey]; ok && v != "" {
 		s.url = v
@@ -112,7 +102,6 @@ func (s clientSettings) connect() (*natsio.Conn, error) {
 	if s.name != "" {
 		opts = append(opts, natsio.Name(s.name))
 	}
-	opts = append(opts, s.natsOpts...)
 	return natsio.Connect(s.url, opts...)
 }
 

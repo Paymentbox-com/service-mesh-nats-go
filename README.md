@@ -14,7 +14,7 @@ protobuf definitions, through its Go library
 [grpc-service-mesh-go](https://github.com/Paymentbox-com/grpc-service-mesh-go).
 
 One package, `nats`, a runtime for NATS on `nats.go`. It exports `New`,
-`NewClient`, its configuration keys, and two `Option`s. The contract types it
+`NewClient`, its configuration keys, and `WithLogger`. The contract types it
 implements, `mesh.Target`, `mesh.Message`, `mesh.Endpoint`, `mesh.Subscriber`,
 `mesh.Client`, `mesh.Runtime`, and the rest, come from
 `github.com/Paymentbox-com/service-mesh-go/mesh`.
@@ -221,8 +221,7 @@ can be given to both.
 | `deployment_group` | `New`       | required           | the queue group bindings join                      |
 | `concurrency`      | `New`       | CPU count          | max handlers running at once                       |
 
-A value that does not parse yields `ErrBadConfig`. Extra nats.go connection
-options are passed to `NewClient` as `nats.WithNATSOptions`, and a logger to
+A value that does not parse yields `ErrBadConfig`. A logger is passed to
 `New` as `nats.WithLogger`. The package re-exports `ErrNoResponders` and
 `ErrTimeout` from nats.go so callers need not import it.
 

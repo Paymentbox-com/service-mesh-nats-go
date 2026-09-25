@@ -125,7 +125,7 @@ func TestParseClientSettings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := parseClientSettings(tc.cfg, nil)
+			s, err := parseClientSettings(tc.cfg)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("want %v, got %v", tc.wantErr, err)

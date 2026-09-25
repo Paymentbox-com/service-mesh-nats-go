@@ -27,11 +27,11 @@ var _ mesh.Client = (*Client)(nil)
 
 // NewClient connects to NATS and returns a client that owns the connection
 // and holds serviceMap. cfg is read for URLKey, NameKey, ConnectTimeoutKey,
-// and RequestTimeoutKey; every other key is ignored. Of the options, only
-// WithNATSOptions applies. A value that does not parse returns ErrBadConfig;
-// a connection failure returns the nats.go error unchanged.
-func NewClient(cfg mesh.Config, serviceMap mesh.ServiceMap, opts ...Option) (*Client, error) {
-	s, err := parseClientSettings(cfg, opts)
+// and RequestTimeoutKey; every other key is ignored. A value that does not
+// parse returns ErrBadConfig; a connection failure returns the nats.go error
+// unchanged.
+func NewClient(cfg mesh.Config, serviceMap mesh.ServiceMap) (*Client, error) {
+	s, err := parseClientSettings(cfg)
 	if err != nil {
 		return nil, err
 	}

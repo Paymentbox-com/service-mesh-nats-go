@@ -64,7 +64,7 @@ var _ mesh.Runtime = (*Runtime)(nil)
 // New validates cfg and every binding and returns a runtime that serves them
 // on client's connection. cfg is read for mesh.DeploymentGroupKey, which is
 // required, and ConcurrencyKey; connection keys are ignored because client
-// already carries them. Of the options, only WithLogger applies.
+// already carries them. WithLogger sets the logger.
 //
 // The parameter is a *Client, not a mesh.Client, because the runtime
 // subscribes through the NATS connection the client owns.
