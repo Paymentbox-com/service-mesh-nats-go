@@ -1,8 +1,11 @@
 # Examples
 
-
-Each snippet below runs as written against a local `nats-server`. The
-`echo`, `created`, and `sm` values are the ones declared under [Usage](../README.md#usage).
+These examples show the three shapes a process using this transport usually
+takes: one that serves, one that only calls, and several deployments sharing a
+topic. Each snippet runs against a local `nats-server`, and uses the `echo`,
+`created`, and `sm` values declared under [Usage](../README.md#usage).
+`NATS_URL` points a snippet at a different server, and an empty value takes the
+default.
 
 ## A Server Process
 
@@ -85,9 +88,11 @@ if err := c.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42
 
 Two deployments on one topic each handle every event once. A subscriber
 with `consumer_group` set to `none` handles every event on every instance.
-Each runtime is built from its own client, since a client is one connection. `url` is the server URL.
+Each runtime is built from its own client, since a client is one connection.
 
 ```go
+url := os.Getenv("NATS_URL")
+ctx := context.Background()
 onCreated := func(ctx context.Context, m mesh.Message) error {
     log.Printf("created: %s", m.Payload)
     return nil
@@ -113,7 +118,7 @@ sub := mesh.Subscriber{Target: created, Handler: onCreated}
 billing := serve("billing", sub)
 audit := serve("audit", sub)
 
-// Every instance of a deployment handles every event: no group at all.
+// With no consumer group, every instance of a deployment handles every event.
 broadcast := mesh.Subscriber{
     Target:   created,
     Metadata: map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone},

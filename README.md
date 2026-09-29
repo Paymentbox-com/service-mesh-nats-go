@@ -1,16 +1,33 @@
 # service-mesh-nats-go
 
-A Go implementation of the
+`nats` is the Go implementation of the
 [Service Mesh API Specification](https://github.com/Paymentbox-com/service-mesh-api)
-over NATS. Module path `github.com/Paymentbox-com/service-mesh-nats-go`. The Go
-contract it implements is
-[service-mesh-go](https://github.com/Paymentbox-com/service-mesh-go).
+over NATS. It implements the Go contract in
+[service-mesh-go](https://github.com/Paymentbox-com/service-mesh-go) on top of
+the `nats.go` client.
 
-One package, `nats`, a runtime for NATS on `nats.go`. It exports `New`,
-`NewClient`, its configuration keys, and `WithLogger`. The contract types it
-implements, `mesh.Target`, `mesh.Message`, `mesh.Endpoint`, `mesh.Subscriber`,
-`mesh.Client`, `mesh.Runtime`, and the rest, come from
+The `nats` package provides:
+* `Client`, built with `NewClient`, which implements `mesh.Client` over one NATS connection
+* `Runtime`, built with `New`, which implements `mesh.Runtime` on a `Client`'s connection
+* the configuration keys it reads, and `WithLogger`
+* the errors it defines
+
+The contract types it works with, such as `mesh.Target`, `mesh.Message`,
+`mesh.Endpoint`, and `mesh.Subscriber`, come from
 `github.com/Paymentbox-com/service-mesh-go/mesh`.
+
+## Install
+
+The module is `github.com/Paymentbox-com/service-mesh-nats-go`, and its one
+package, `nats`, is imported as
+`github.com/Paymentbox-com/service-mesh-nats-go/nats`.
+
+```sh
+go get github.com/Paymentbox-com/service-mesh-nats-go
+```
+
+Requires Go 1.26 or newer and a reachable NATS server. The module depends on
+`github.com/Paymentbox-com/service-mesh-go/mesh` and `github.com/nats-io/nats.go`.
 
 ## Usage
 
@@ -52,17 +69,19 @@ reply, err := client.Request(ctx, mesh.Message{Target: echo, Payload: []byte("hi
 err = client.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42")}, nil)
 ```
 
-The client is the runtime's connection. `rt.Client()` returns it in whatever state
-it is in, and `Request` and `Publish` on it after `Stop` return `nats.ErrClosed`.
-A process that only makes requests or publishes uses `nats.NewClient(cfg, sm)` on
-its own and closes it when done. `client.ServiceMap()` and `rt.ServiceMap()` return the
-map the client was built with. `examples/echo` is a single-process version of the above.
-`examples/server` and `examples/client` run the two sides as separate processes, and the [end-to-end walkthrough](docs/e2e.md)
-covers testing each side.
+The client is the runtime's connection. `rt.Client()` returns it in every
+state, and `rt.Stop` closes it. A process that only requests and publishes
+builds a client itself and calls `Close` when done. `rt.ServiceMap()` and
+`client.ServiceMap()` return the map the client was built with.
+
+`examples/echo` is a single-process version of the above. `examples/server`
+and `examples/client` run the two sides as separate processes, and the
+[End-to-End Walkthrough](docs/e2e.md) runs them against a local server.
 
 ## Documentation
 
 - [Examples](docs/examples.md): a server process, a call-only client process, and consumer groups
-- [What the NATS Runtime Decides](docs/runtime-behavior.md): subjects, configuration, metadata, delivery, handler failure, timeouts, concurrency, lifecycle, and errors
-- [End-to-End Walkthrough](docs/e2e.md): the example server and client run against a local broker
-- [Development](docs/development.md): tools, recipes, and tests
+- [Public API](docs/public-api.md): every exported name in `nats`
+- [Transport Specific Implementation](docs/transport-specific-implementation.md): subjects, configuration, metadata, delivery, handler failure, timeouts, concurrency, lifecycle, and errors
+- [End-to-End Walkthrough](docs/e2e.md): the example server and client run against a local NATS server
+- [Development](docs/development.md): the recipes and the tests
