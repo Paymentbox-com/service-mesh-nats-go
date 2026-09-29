@@ -25,6 +25,7 @@ recipes.
 | `just lint` | Reports lint findings with `golangci-lint`. |
 | `just check` | Runs the format check, `vet`, `test`, `vuln`, and `lint`, in the order CI runs them. |
 | `just release` | Tags the current commit with the version in `VERSION`, pushes the tag, and asks the Go module proxy to fetch it. It refuses a working tree with changes. |
+| `just bump patch`, `just bump minor`, `just bump major` | Raises the version in `VERSION` by one step. A minor bump resets the patch number, and a major bump resets both. |
 
 ## Tests
 
@@ -36,7 +37,8 @@ needs to be running.
 
 A Go version is released by its tag alone. Nothing is built or uploaded.
 
-1. Set the new version in `VERSION`.
+1. Run `just bump patch`, `just bump minor`, or `just bump major` to set the
+   new version in `VERSION`.
 2. Commit, push `master`, and wait for CI to pass.
 3. Run `just release`.
 

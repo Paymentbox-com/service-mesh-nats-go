@@ -78,3 +78,21 @@ release:
     git tag -a {{version}} -m "{{version}}"
     git push origin {{version}}
     GOPROXY=https://proxy.golang.org GOFLAGS=-mod=mod {{go}} list -m github.com/Paymentbox-com/service-mesh-nats-go@{{version}}
+
+# Bump the version in VERSION by one patch, minor, or major step: just bump patch
+[group('release')]
+bump part:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    current="$(cat VERSION)"
+    current="${current#v}"
+    IFS=. read -r major minor patch <<< "$current"
+    case "{{part}}" in
+      patch) patch=$((patch + 1)) ;;
+      minor) minor=$((minor + 1)); patch=0 ;;
+      major) major=$((major + 1)); minor=0; patch=0 ;;
+      *) echo "part must be patch, minor, or major" >&2; exit 1 ;;
+    esac
+    next="${major}.${minor}.${patch}"
+    echo "v$next" > VERSION
+    echo "v$current -> v$next"
