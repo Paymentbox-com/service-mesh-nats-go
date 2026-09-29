@@ -71,7 +71,7 @@ func main() {
 	}
 }
 
-// report names the kind of failure so each step in E2E.md has a
+// report names the kind of failure so each step in docs/e2e.md has a
 // recognisable outcome.
 func report(err error) {
 	var he *nats.HandlerError

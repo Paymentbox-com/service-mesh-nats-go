@@ -1,11 +1,11 @@
-# End-to-end walkthrough
+# End-to-End Walkthrough
 
 Two Go processes, a server and a client, talking through a local NATS
 broker. Every step lists the output it produces.
 
-Open three terminals in this directory.
+Open three terminals in the repository root.
 
-## Terminal 1, the broker
+## Terminal 1, the Broker
 
 ```
 nats-server
@@ -14,7 +14,7 @@ nats-server
 It listens on `127.0.0.1:4222`, which is the default both programs use. Set
 `NATS_URL` on any command below to point at a different address.
 
-## Terminal 2, the server process
+## Terminal 2, the Server Process
 
 ```
 INSTANCE=alpha go run ./examples/server
@@ -23,11 +23,11 @@ INSTANCE=alpha go run ./examples/server
 It logs `serving demo.echo and demo.created; Ctrl-C to stop` and then prints
 every request and event it receives.
 
-## Terminal 3, the client process
+## Terminal 3, the Client Process
 
 Each command is a fresh process with its own NATS connection.
 
-### 1. Request/response round trip with metadata in both directions
+### 1. Request and Reply with Metadata in Both Directions
 
 ```
 go run ./examples/client request hello
@@ -36,7 +36,7 @@ go run ./examples/client request hello
 Client prints `reply after 1ms: "echo: hello" metadata map[Echoed-By:alpha]`.
 Terminal 2 logs the request with the client's `Sent-At` header.
 
-### 2. Fire-and-forget publish to the subscriber
+### 2. Publish to the Subscriber
 
 ```
 go run ./examples/client publish "order 42"
@@ -44,7 +44,7 @@ go run ./examples/client publish "order 42"
 
 Client prints `published`. Terminal 2 logs `created event "order 42"`.
 
-### 3. Handler error surfaced to the caller
+### 3. Handler Error Reaching the Caller
 
 ```
 go run ./examples/client request fail
@@ -53,7 +53,7 @@ go run ./examples/client request fail
 Client prints `handler failed on the server: invalid argument`. Terminal 2
 logs the error at ERROR level.
 
-### 4. Runtime request timeout
+### 4. Request Timeout
 
 ```
 TIMEOUT=1s go run ./examples/client request slow
@@ -62,7 +62,7 @@ TIMEOUT=1s go run ./examples/client request slow
 Client prints `request timed out` after one second. The server handler keeps
 running to five seconds; its reply goes nowhere.
 
-### 5. Contract misuse is caught before the wire
+### 5. Kind Mismatch Caught Before Sending
 
 ```
 go run ./examples/echo
@@ -71,7 +71,7 @@ go run ./examples/echo
 The last line is
 `publish to a route target: mesh: target kind does not match its use`.
 
-### 6. One deployment, two instances
+### 6. One Deployment, Two Instances
 
 In a fourth terminal start a second instance of the same deployment:
 
@@ -89,7 +89,7 @@ go run ./examples/client publish "order 43"
 `Echoed-By` alternates between `alpha` and `beta`, and each event shows up
 in only one server's log. Both instances share the deployment group `demo`.
 
-### 6b. Two deployments
+### 7. Two Deployments
 
 Stop `beta` and start it again as a different deployment:
 
@@ -101,7 +101,7 @@ Publish again. The event now shows up in both logs, once per deployment.
 Requests still go to one instance, but which one is now arbitrary since
 both deployments serve `demo.echo`.
 
-### 7. Graceful drain
+### 8. Graceful Drain
 
 In terminal 3 start a slow request, then within a few seconds press Ctrl-C in
 terminal 2.
@@ -113,7 +113,7 @@ go run ./examples/client request slow
 Terminal 2 logs `stopping, draining up to 10s`, waits for the handler, then
 `stopped`. The client still receives `reply after 5.0s: "echo: slow"`.
 
-### 8. No responders
+### 9. No Responders
 
 With every server stopped:
 
