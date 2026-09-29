@@ -1,6 +1,6 @@
 # service-mesh-nats-go
 
-`nats` is the Go implementation of the
+service-mesh-nats-go is the Go implementation of the
 [Service Mesh API Specification](https://github.com/Paymentbox-com/service-mesh-api)
 over NATS. It implements the Go contract in
 [service-mesh-go](https://github.com/Paymentbox-com/service-mesh-go) on top of
