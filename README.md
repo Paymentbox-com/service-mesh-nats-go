@@ -2,8 +2,7 @@
 
 A Go implementation of the
 [Service Mesh API Specification](https://github.com/Paymentbox-com/service-mesh-api)
-over NATS. Module path `github.com/Paymentbox-com/service-mesh-nats-go`. The
-specification is the authority for everything this package does. The Go
+over NATS. Module path `github.com/Paymentbox-com/service-mesh-nats-go`. The Go
 contract it implements is
 [service-mesh-go](https://github.com/Paymentbox-com/service-mesh-go).
 
