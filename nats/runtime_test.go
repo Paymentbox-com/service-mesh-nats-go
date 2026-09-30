@@ -227,8 +227,9 @@ func TestPublish_ConsumerGroups(t *testing.T) {
 	}
 }
 
-func TestPublish_ConsumerGroupOnTarget(t *testing.T) {
-	// The group set on the Target, not the binding, still separates the two.
+func TestPublish_ConsumerGroupOnTargetIsIgnored(t *testing.T) {
+	// A Target carries no consumer group, so both subscribers join the
+	// runtimes' shared deployment group and one of them handles the event.
 	url := startServer(t)
 	var received atomic.Int32
 	for _, group := range []string{"a", "b"} {
@@ -242,7 +243,11 @@ func TestPublish_ConsumerGroupOnTarget(t *testing.T) {
 	if err := c.Publish(context.Background(), mesh.Message{Target: eventTarget}, nil); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return received.Load() >= 2 })
+	waitFor(t, func() bool { return received.Load() >= 1 })
+	time.Sleep(100 * time.Millisecond) // give an unwanted extra delivery time to show up
+	if got := received.Load(); got != 1 {
+		t.Fatalf("want 1 delivery, got %d", got)
+	}
 }
 
 func TestRuntime_ClientIsTheGivenClient(t *testing.T) {

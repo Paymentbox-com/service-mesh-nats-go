@@ -50,20 +50,17 @@ func checkKind(t mesh.Target, want mesh.Kind, use string) error {
 	return nil
 }
 
-// consumerGroup resolves the NATS queue group for a binding. The binding's
-// own metadata wins, then the target's metadata, then the deployment group.
-// The empty string means a plain subscription with no group.
-func consumerGroup(binding, target map[string]string, deploymentGroup string) string {
-	for _, md := range [2]map[string]string{binding, target} {
-		v, set := md[mesh.ConsumerGroupKey]
-		switch {
-		case !set || v == "":
-			continue
-		case v == mesh.ConsumerGroupNone:
-			return ""
-		default:
-			return v
-		}
+// consumerGroup resolves the NATS queue group of an Endpoint or Subscriber
+// from its metadata, falling back to the runtime's deployment group. The
+// empty string means a plain subscription with no group. A Target carries no
+// consumer group, so its metadata is not read.
+func consumerGroup(metadata map[string]string, deploymentGroup string) string {
+	switch v := metadata[mesh.ConsumerGroupKey]; v {
+	case "":
+		return deploymentGroup
+	case mesh.ConsumerGroupNone:
+		return ""
+	default:
+		return v
 	}
-	return deploymentGroup
 }

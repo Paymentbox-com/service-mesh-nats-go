@@ -223,30 +223,25 @@ func TestConsumerGroupResolution(t *testing.T) {
 	none := map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}
 	named := func(n string) map[string]string { return map[string]string{mesh.ConsumerGroupKey: n} }
 	cases := []struct {
-		name    string
-		binding map[string]string
-		target  map[string]string
-		want    string
+		name     string
+		metadata map[string]string
+		want     string
 	}{
-		{name: "absent everywhere joins deployment group", want: "billing"},
-		{name: "none on binding gives no group", binding: none, want: ""},
-		{name: "name on binding", binding: named("audit"), want: "audit"},
-		{name: "name on target", target: named("audit"), want: "audit"},
-		{name: "none on target", target: none, want: ""},
-		{name: "binding wins over target", binding: named("from-binding"), target: named("from-target"), want: "from-binding"},
-		{name: "empty binding value falls through to target", binding: named(""), target: named("audit"), want: "audit"},
-		{name: "empty everywhere falls through to deployment group", binding: named(""), target: named(""), want: "billing"},
+		{name: "absent joins deployment group", want: "billing"},
+		{name: "none gives no group", metadata: none, want: ""},
+		{name: "a name is the group", metadata: named("audit"), want: "audit"},
+		{name: "empty falls through to deployment group", metadata: named(""), want: "billing"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := consumerGroup(tc.binding, tc.target, "billing"); got != tc.want {
+			if got := consumerGroup(tc.metadata, "billing"); got != tc.want {
 				t.Fatalf("want %q, got %q", tc.want, got)
 			}
 		})
 	}
 }
 
-func TestNew_BindingsUseConsumerGroup(t *testing.T) {
+func TestNew_EndpointsAndSubscribersUseConsumerGroup(t *testing.T) {
 	c := testClient(t, testConfig(startServer(t)))
 	cfg := mesh.Config{mesh.DeploymentGroupKey: "billing"}
 	r, err := New(c, cfg,
@@ -256,10 +251,10 @@ func TestNew_BindingsUseConsumerGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := r.bindings[0].queue; got != "" {
+	if got := r.subscriptions[0].queue; got != "" {
 		t.Fatalf("endpoint with none: want plain subscription, got queue %q", got)
 	}
-	if got := r.bindings[1].queue; got != "billing" {
+	if got := r.subscriptions[1].queue; got != "billing" {
 		t.Fatalf("subscriber default: want %q, got %q", "billing", got)
 	}
 }

@@ -37,14 +37,16 @@ Message metadata travels as NATS headers, one value per key. The runtime reads
 no message keys, and writes `HandlerErrorHeader` (`Mesh-Handler-Error`) on a
 failed reply.
 
-Endpoint and subscriber metadata is read when `New` runs. `consumer_group` is
-taken from the `Endpoint` or `Subscriber` first, then from its `Target`.
-`deployment_group` on a client-side `Target` is ignored.
+Endpoint and subscriber metadata is read when `New` runs, and its
+`consumer_group` selects the queue group. A `Target` carries no
+`consumer_group` or `deployment_group`, so a target's metadata is not read for
+either.
 
 ## Delivery
 
 A consumer group is a NATS queue group. Every endpoint and subscriber joins the
-deployment group unless `consumer_group` overrides it.
+runtime's `deployment_group` unless its own `consumer_group` overrides it. An
+empty `consumer_group` counts as unset.
 
 `none` gives a plain subscription, so every instance handles every message, and
 for an endpoint every instance replies.

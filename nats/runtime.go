@@ -25,9 +25,9 @@ const (
 	stateStopped
 )
 
-// binding is a validated Endpoint or Subscriber. queue is the NATS queue
-// group; empty means a plain subscription.
-type binding struct {
+// subscription is a validated Endpoint or Subscriber, ready to subscribe.
+// queue is the NATS queue group, and empty means a plain subscription.
+type subscription struct {
 	subject    string
 	queue      string
 	target     mesh.Target
@@ -36,11 +36,11 @@ type binding struct {
 }
 
 // Runtime implements mesh.Runtime over NATS. It is built from a Client and
-// serves its bindings on that client's connection.
+// serves its endpoints and subscribers on that client's connection.
 type Runtime struct {
-	client   *Client
-	logger   *slog.Logger
-	bindings []binding
+	client        *Client
+	logger        *slog.Logger
+	subscriptions []subscription
 
 	mu    sync.Mutex // guards state, subs, and the lifecycle methods
 	state runtimeState
@@ -61,7 +61,8 @@ type Runtime struct {
 
 var _ mesh.Runtime = (*Runtime)(nil)
 
-// New validates cfg and every binding and returns a runtime that serves them
+// New validates cfg and every endpoint and subscriber, and returns a runtime
+// that serves them
 // on client's connection. cfg is read for mesh.DeploymentGroupKey, which is
 // required, and ConcurrencyKey; connection keys are ignored because client
 // already carries them. WithLogger sets the logger.
@@ -70,8 +71,8 @@ var _ mesh.Runtime = (*Runtime)(nil)
 // subscribes through the NATS connection the client owns.
 //
 // New returns mesh.ErrNoDeploymentGroup, ErrBadConfig, mesh.ErrKindMismatch,
-// or mesh.ErrInvalidTarget. Two bindings that assemble to the same subject
-// become two subscriptions.
+// or mesh.ErrInvalidTarget. Two endpoints or subscribers that assemble to
+// the same subject become two subscriptions.
 func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers []mesh.Subscriber, opts ...Option) (*Runtime, error) {
 	if client == nil {
 		return nil, errors.New("nats: client is nil")
@@ -86,23 +87,23 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 		sem:    make(chan struct{}, s.concurrency),
 	}
 
-	bind := func(t mesh.Target, want mesh.Kind, use string, md map[string]string) (binding, error) {
+	prepare := func(t mesh.Target, want mesh.Kind, use string, md map[string]string) (subscription, error) {
 		if err := checkKind(t, want, use); err != nil {
-			return binding{}, err
+			return subscription{}, err
 		}
 		subj, err := subject(t)
 		if err != nil {
-			return binding{}, err
+			return subscription{}, err
 		}
-		return binding{
+		return subscription{
 			subject: subj,
-			queue:   consumerGroup(md, t.Metadata, s.deploymentGroup),
+			queue:   consumerGroup(md, s.deploymentGroup),
 			target:  t,
 		}, nil
 	}
 
 	for _, e := range endpoints {
-		b, err := bind(e.Target, mesh.KindRoute, "Endpoint", e.Metadata)
+		b, err := prepare(e.Target, mesh.KindRoute, "Endpoint", e.Metadata)
 		if err != nil {
 			return nil, err
 		}
@@ -110,10 +111,10 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 			return nil, fmt.Errorf("nats: endpoint %q has a nil handler", b.subject)
 		}
 		b.endpoint = e.Handler
-		r.bindings = append(r.bindings, b)
+		r.subscriptions = append(r.subscriptions, b)
 	}
 	for _, sub := range subscribers {
-		b, err := bind(sub.Target, mesh.KindTopic, "Subscriber", sub.Metadata)
+		b, err := prepare(sub.Target, mesh.KindTopic, "Subscriber", sub.Metadata)
 		if err != nil {
 			return nil, err
 		}
@@ -121,7 +122,7 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 			return nil, fmt.Errorf("nats: subscriber %q has a nil handler", b.subject)
 		}
 		b.subscriber = sub.Handler
-		r.bindings = append(r.bindings, b)
+		r.subscriptions = append(r.subscriptions, b)
 	}
 	return r, nil
 }
@@ -144,7 +145,7 @@ func (r *Runtime) Running() bool {
 	return r.running.Load()
 }
 
-// Start subscribes every binding on the client's connection, flushes, and
+// Start subscribes every endpoint and subscriber on the client's connection, flushes, and
 // begins receiving. It returns ErrAlreadyStarted on a running runtime,
 // ErrStopped after Stop, and ErrClosed when the client is closed. A
 // subscribe or flush failure removes the subscriptions made so far and
@@ -173,7 +174,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	r.accepting = true
 	r.acceptMu.Unlock()
 
-	subs := make([]*natsio.Subscription, 0, len(r.bindings))
+	subs := make([]*natsio.Subscription, 0, len(r.subscriptions))
 	fail := func(err error) error {
 		for _, s := range subs {
 			_ = s.Unsubscribe()
@@ -185,7 +186,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 
-	for _, b := range r.bindings {
+	for _, b := range r.subscriptions {
 		b := b
 		cb := func(m *natsio.Msg) {
 			r.dispatch(func() { r.serve(nc, b, m) })
@@ -284,7 +285,7 @@ func (r *Runtime) dispatch(fn func()) {
 	}()
 }
 
-func (r *Runtime) serve(nc *natsio.Conn, b binding, m *natsio.Msg) {
+func (r *Runtime) serve(nc *natsio.Conn, b subscription, m *natsio.Msg) {
 	in := mesh.Message{Target: b.target, Metadata: fromHeader(m.Header), Payload: m.Data}
 
 	if b.subscriber != nil {

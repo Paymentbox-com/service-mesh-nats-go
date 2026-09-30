@@ -22,19 +22,20 @@
 // reads no message keys. It writes HandlerErrorHeader on a reply when an
 // endpoint handler fails.
 //
-// Binding metadata is read at construction. mesh.ConsumerGroupKey on an
-// Endpoint or Subscriber, or on its Target, selects the queue group. The
-// binding's metadata wins over the target's. mesh.DeploymentGroupKey on a
-// client-side Target is ignored; NATS chooses the group on the receiving
-// side.
+// Endpoint and Subscriber metadata is read at construction.
+// mesh.ConsumerGroupKey in it selects the queue group. A Target carries no
+// consumer group or deployment group, so a Target's metadata is not read for
+// either.
 //
 // # Delivery
 //
-// A consumer group is a NATS queue group. Every binding joins the group named
-// by mesh.DeploymentGroupKey unless mesh.ConsumerGroupKey overrides it.
+// A consumer group is a NATS queue group. Every endpoint and subscriber joins
+// the group named by the runtime's mesh.DeploymentGroupKey unless its own
+// mesh.ConsumerGroupKey overrides it.
 // mesh.ConsumerGroupNone gives a plain subscription: every instance receives
 // every message, and for an endpoint every instance replies. Any other value
-// names the group. Two bindings on one subject are two subscriptions, with
+// names the group. Two endpoints or subscribers on one subject are two
+// subscriptions, with
 // whatever delivery NATS gives them.
 //
 // # Handler failure
@@ -47,7 +48,7 @@
 // # Concurrency
 //
 // Handlers run on their own goroutines, at most ConcurrencyKey at once across
-// all bindings. Beyond that, deliveries wait in nats.go's pending buffer.
+// all endpoints and subscribers. Beyond that, deliveries wait in nats.go's pending buffer.
 //
 // # Lifecycle
 //
@@ -57,7 +58,7 @@
 //
 // A Runtime is built from a Client the application constructed, and that
 // client is the runtime's connection. Runtime.Client returns it in every
-// state. Start subscribes every binding on the client's connection and
+// state. Start subscribes every endpoint and subscriber on the client's connection and
 // flushes; on a closed client it returns ErrClosed. Stop unsubscribes, waits
 // for in-flight handlers until its context is done, cancels the handlers'
 // context, flushes, and closes the client. It returns ctx.Err() when
