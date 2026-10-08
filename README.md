@@ -83,5 +83,6 @@ and `examples/client` run the two sides as separate processes, and the
 - [Examples](docs/examples.md): a server process, a call-only client process, and consumer groups
 - [Public API](docs/public-api.md): every exported name in `nats`
 - [Transport Specific Implementation](docs/transport-specific-implementation.md): subjects, configuration, metadata, delivery, handler failure, timeouts, concurrency, lifecycle, and errors
+- [JetStream](docs/jetstream.md): publishing to streams, consuming from consumers, the options, delivery metadata, and stopping
 - [End-to-End Walkthrough](docs/e2e.md): the example server and client run against a local NATS server
 - [Development](docs/development.md): the recipes and the tests

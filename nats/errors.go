@@ -8,9 +8,10 @@ import (
 
 // Errors this package defines beyond the three in the mesh contract.
 var (
-	// ErrBadConfig is returned by New and NewClient when a configuration
-	// value, or a per-call option, cannot be parsed. It is wrapped with the
-	// key and value.
+	// ErrBadConfig is returned by New, NewClient, Request, and Publish when a
+	// configuration value, an Endpoint or Subscriber option, or a per-call
+	// option cannot be parsed or does not apply where it is given. It is
+	// wrapped with the key and value.
 	ErrBadConfig = errors.New("nats: bad configuration value")
 
 	// ErrClosed is returned by Request and Publish after Close, and by Start
@@ -24,11 +25,16 @@ var (
 	// ErrStopped is returned by Start after Stop. A runtime is not
 	// restartable.
 	ErrStopped = errors.New("nats: runtime has been stopped")
+
+	// ErrStreamCoversRoute is returned by Start on a runtime with a
+	// JetStream subscriber when a stream covers one of its endpoint
+	// subjects. It is wrapped with the subject and the stream name.
+	ErrStreamCoversRoute = errors.New("nats: a stream covers an endpoint subject")
 )
 
 // HandlerError is returned by Request when the serving handler returned an
-// error or panicked. Text is the handler's error message as sent by the
-// serving runtime.
+// error or panicked. Text is the handler's error message, sent by the serving
+// runtime in mesh.HandlerErrorKey.
 type HandlerError struct {
 	Text string
 }
@@ -36,10 +42,6 @@ type HandlerError struct {
 func (e *HandlerError) Error() string {
 	return "nats: handler failed: " + e.Text
 }
-
-// HandlerErrorHeader is the reply header this runtime sets when an endpoint
-// handler fails. Application metadata should not use this key.
-const HandlerErrorHeader = "Mesh-Handler-Error"
 
 // Transport errors callers most often test for, re-exported so that a caller
 // need not import nats.go. They are the same values, so errors.Is works.

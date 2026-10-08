@@ -60,7 +60,8 @@ func TestRequest_RoundTrip(t *testing.T) {
 
 func TestRequest_EmptyPayloadAndNoMetadata(t *testing.T) {
 	url := startServer(t)
-	startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	empty := func(ctx context.Context, m mesh.Message) (mesh.Message, error) { return mesh.Message{}, nil }
+	startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: empty}}, nil)
 
 	c := testClient(t, testConfig(url))
 	reply, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
@@ -110,14 +111,15 @@ func TestRequest_HandlerError(t *testing.T) {
 
 func TestRequest_Timeouts(t *testing.T) {
 	url := startServer(t)
+	// The handler ignores its context, whose deadline matches the caller's,
+	// so only the caller's side times out.
+	release := make(chan struct{})
 	slow := mesh.Endpoint{Target: echoTarget, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
-		select {
-		case <-time.After(testWait):
-		case <-ctx.Done():
-		}
+		<-release
 		return m, nil
 	}}
 	startRuntime(t, testConfig(url), []mesh.Endpoint{slow}, nil)
+	t.Cleanup(func() { close(release) })
 
 	cfg := testConfig(url)
 	cfg[RequestTimeoutKey] = "100ms"
