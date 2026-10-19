@@ -39,7 +39,7 @@ A Go version is released by its tag alone. Nothing is built or uploaded.
 
 1. Run `just bump patch`, `just bump minor`, or `just bump major` to set the
    new version in `VERSION` and commit that file.
-2. Push `master` and wait for CI to pass.
+2. Push `main` and wait for CI to pass.
 3. Run `just release`.
 
 The proxy fetch in `just release` only makes the new version resolve for others
