@@ -63,9 +63,10 @@ func (c *Client) ServiceMap() mesh.ServiceMap {
 
 // Request sends msg to a route target and returns the reply.
 //
-// The request is bounded by the request timeout or ctx's deadline, whichever
-// comes first. opts may carry RequestTimeoutKey to override the configured
-// request timeout for this call, and StreamKey returns ErrBadConfig. Expiry
+// Settings are opts over msg.Target's Metadata. The request is bounded by
+// the request timeout or ctx's deadline, whichever comes first.
+// RequestTimeoutKey in the settings overrides the configured request timeout
+// for this call, and StreamKey returns ErrBadConfig. Expiry
 // of the request timeout is reported as natsio.ErrTimeout, and a deadline or
 // cancellation on ctx as ctx's own error.
 //
@@ -79,6 +80,7 @@ func (c *Client) Request(ctx context.Context, msg mesh.Message, opts map[string]
 	if err != nil {
 		return mesh.Message{}, err
 	}
+	opts = mergeSettings(msg.Target.Metadata, opts)
 	if v := opts[StreamKey]; v != "" {
 		return mesh.Message{}, fmt.Errorf("%w: %s=%q applies to topic targets only", ErrBadConfig, StreamKey, v)
 	}
@@ -127,9 +129,9 @@ func (c *Client) Request(ctx context.Context, msg mesh.Message, opts map[string]
 // Publish sends msg to a topic target. mesh.MessageIDKey is copied to
 // Nats-Msg-Id.
 //
-// When opts carries StreamKey, Publish sends a JetStream publish that
-// expects that stream and waits for its ack, bounded like Request. opts may
-// then carry RequestTimeoutKey. The ack's error or the nats.go error is
+// Settings are opts over msg.Target's Metadata. When they carry StreamKey,
+// Publish sends a JetStream publish that expects that stream and waits for
+// its ack, bounded like Request, and RequestTimeoutKey in them applies. The ack's error or the nats.go error is
 // returned unchanged, except that expiry of the request timeout is reported
 // as natsio.ErrTimeout.
 func (c *Client) Publish(ctx context.Context, msg mesh.Message, opts map[string]string) error {
@@ -140,6 +142,7 @@ func (c *Client) Publish(ctx context.Context, msg mesh.Message, opts map[string]
 	if err != nil {
 		return err
 	}
+	opts = mergeSettings(msg.Target.Metadata, opts)
 	stream := opts[StreamKey]
 	timeout := c.requestTimeout
 	if stream != "" {
@@ -169,6 +172,37 @@ func (c *Client) Publish(ctx context.Context, msg mesh.Message, opts map[string]
 		return timeoutError(ctx, err)
 	}
 	return nil
+}
+
+// Conn returns the client's connection, in every state. Closing or draining
+// it directly ends the client, and for a client a Runtime was built from, the
+// runtime's subscriptions and consumers. Request and Publish on a client
+// whose connection was closed this way return the nats.go error, not
+// ErrClosed.
+func (c *Client) Conn() *natsio.Conn {
+	return c.nc
+}
+
+// JetStream returns the JetStream context the client publishes with, on the
+// client's connection.
+func (c *Client) JetStream() jetstream.JetStream {
+	return c.js
+}
+
+// Stream returns the stream named by target's StreamKey metadata. It returns
+// nil and no error when target has none, which is so for every route target.
+// It returns ErrClosed after Close, and a lookup failure as the nats.go error
+// unchanged.
+func (c *Client) Stream(ctx context.Context, target mesh.Target) (jetstream.Stream, error) {
+	name := target.Metadata[StreamKey]
+	if name == "" {
+		return nil, nil
+	}
+	_, js, err := c.connections()
+	if err != nil {
+		return nil, err
+	}
+	return js.Stream(ctx, name)
 }
 
 // boundContext bounds ctx by timeout and returns how long the result has

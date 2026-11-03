@@ -79,9 +79,10 @@ var _ mesh.Runtime = (*Runtime)(nil)
 // MaxDeliverKey. Connection keys are ignored because client already carries
 // them. WithLogger sets the logger.
 //
-// Endpoint metadata is read for mesh.ConsumerGroupKey, and StreamKey on an
-// endpoint returns ErrBadConfig. Subscriber metadata is read for
-// mesh.ConsumerGroupKey and the JetStream options.
+// The consumer group comes from each Endpoint's and Subscriber's
+// ConsumerGroup. Their settings are their Metadata over their Target's
+// Metadata. StreamKey in an endpoint's settings returns ErrBadConfig, and a
+// subscriber's settings are read for the JetStream options.
 //
 // The parameter is a *Client, not a mesh.Client, because the runtime
 // subscribes through the NATS connection the client owns.
@@ -104,7 +105,7 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 		pending: map[*delivery]struct{}{},
 	}
 
-	prepare := func(t mesh.Target, want mesh.Kind, use string, md map[string]string) (subscription, error) {
+	prepare := func(t mesh.Target, want mesh.Kind, use, group string) (subscription, error) {
 		if err := checkKind(t, want, use); err != nil {
 			return subscription{}, err
 		}
@@ -114,27 +115,27 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 		}
 		return subscription{
 			subject: subj,
-			queue:   consumerGroup(md, s.deploymentGroup),
+			queue:   consumerGroup(group, s.deploymentGroup),
 			target:  t,
 		}, nil
 	}
 
 	for _, e := range endpoints {
-		b, err := prepare(e.Target, mesh.KindRoute, "Endpoint", e.Metadata)
+		b, err := prepare(e.Target, mesh.KindRoute, "Endpoint", e.ConsumerGroup)
 		if err != nil {
 			return nil, err
 		}
 		if e.Handler == nil {
 			return nil, fmt.Errorf("nats: endpoint %q has a nil handler", b.subject)
 		}
-		if v := e.Metadata[StreamKey]; v != "" {
+		if v := mergeSettings(e.Target.Metadata, e.Metadata)[StreamKey]; v != "" {
 			return nil, fmt.Errorf("%w: %s=%q on endpoint %q applies to subscribers only", ErrBadConfig, StreamKey, v, b.subject)
 		}
 		b.endpoint = e.Handler
 		r.subscriptions = append(r.subscriptions, b)
 	}
 	for _, sub := range subscribers {
-		b, err := prepare(sub.Target, mesh.KindTopic, "Subscriber", sub.Metadata)
+		b, err := prepare(sub.Target, mesh.KindTopic, "Subscriber", sub.ConsumerGroup)
 		if err != nil {
 			return nil, err
 		}
@@ -142,7 +143,8 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 			return nil, fmt.Errorf("nats: subscriber %q has a nil handler", b.subject)
 		}
 		b.subscriber = sub.Handler
-		if b.js, err = parseJetStream(sub.Metadata, b.subject, b.queue, s.maxDeliver); err != nil {
+		md := mergeSettings(sub.Target.Metadata, sub.Metadata)
+		if b.js, err = parseJetStream(md, b.subject, b.queue, s.maxDeliver); err != nil {
 			return nil, err
 		}
 		r.subscriptions = append(r.subscriptions, b)
@@ -163,6 +165,79 @@ func (r *Runtime) Client() mesh.Client {
 	return r.client
 }
 
+// Subscriber is a subscriber the runtime is running. It reads the settings
+// the runtime uses, which are the mesh.Subscriber's Metadata over its
+// Target's Metadata.
+type Subscriber struct {
+	client   *Client
+	sub      *subscription
+	consumer *jsConsumer
+}
+
+// Subscriber returns the runtime's subscriber for target, while the runtime
+// is running. It reports false when the runtime is not running or has no
+// subscriber for target.
+func (r *Runtime) Subscriber(target mesh.Target) (*Subscriber, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state != stateRunning {
+		return nil, false
+	}
+	for i := range r.subscriptions {
+		b := &r.subscriptions[i]
+		if b.subscriber == nil || !b.target.Equal(target) {
+			continue
+		}
+		s := &Subscriber{client: r.client, sub: b}
+		for _, c := range r.consumers {
+			if c.sub == b {
+				s.consumer = c
+			}
+		}
+		return s, true
+	}
+	return nil, false
+}
+
+// Target returns the subscriber's target.
+func (s *Subscriber) Target() mesh.Target {
+	return s.sub.target
+}
+
+// ConsumerGroup returns the resolved consumer group: the mesh.Subscriber's
+// ConsumerGroup, or the runtime's deployment group when that is empty.
+func (s *Subscriber) ConsumerGroup() string {
+	if s.sub.queue == "" {
+		return mesh.ConsumerGroupNone
+	}
+	return s.sub.queue
+}
+
+// Stream returns the stream named by the subscriber's settings, or nil and
+// no error when they have no StreamKey. It returns ErrClosed after the
+// runtime's client is closed, and a lookup failure as the nats.go error
+// unchanged.
+func (s *Subscriber) Stream(ctx context.Context) (jetstream.Stream, error) {
+	if s.sub.js == nil {
+		return nil, nil
+	}
+	_, js, err := s.client.connections()
+	if err != nil {
+		return nil, err
+	}
+	return js.Stream(ctx, s.sub.js.stream)
+}
+
+// Consumer returns the consumer the subscriber pulls from, or nil when its
+// settings have no StreamKey. For an ordered consumer, Info describes the
+// consumer nats.go is using at the time of the call.
+func (s *Subscriber) Consumer() jetstream.Consumer {
+	if s.consumer == nil {
+		return nil
+	}
+	return s.consumer.consumer
+}
+
 // Running reports whether Start has succeeded and Stop has not run.
 func (r *Runtime) Running() bool {
 	return r.running.Load()
@@ -172,10 +247,10 @@ func (r *Runtime) Running() bool {
 // flushes, and begins receiving. It returns ErrAlreadyStarted on a running
 // runtime, ErrStopped after Stop, and ErrClosed when the client is closed.
 //
-// With at least one JetStream subscriber, Start first returns
-// ErrStreamCoversRoute when a stream covers an endpoint subject. It then
-// looks up each JetStream subscriber's stream and creates or looks up its
-// consumer, returning the nats.go error unchanged when one fails.
+// Start first returns ErrStreamCoversRoute when a stream covers an endpoint
+// subject. A server without JetStream passes this check. It then looks up
+// each JetStream subscriber's stream and creates or looks up its consumer,
+// returning the nats.go error unchanged when one fails.
 //
 // A failure removes the subscriptions and consumes made so far and leaves
 // the runtime and the client as they were.
@@ -215,10 +290,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 
-	if r.hasJetStream() {
-		if err := checkEndpointStreams(ctx, js, r.subscriptions); err != nil {
-			return fail(err)
-		}
+	if err := checkEndpointStreams(ctx, js, r.subscriptions); err != nil {
+		return fail(err)
 	}
 
 	for i := range r.subscriptions {
@@ -276,15 +349,6 @@ func (r *Runtime) consume(ctx context.Context, js jetstream.JetStream, b *subscr
 		return nil, err
 	}
 	return c, nil
-}
-
-func (r *Runtime) hasJetStream() bool {
-	for _, b := range r.subscriptions {
-		if b.js != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // Stop stops receiving, waits for in-flight handlers until ctx is done,

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
@@ -83,9 +84,9 @@ func TestStart_MissingStream(t *testing.T) {
 func TestStart_NamedGroupConsumerCreatedThenUpdated(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", AckWaitKey: "10s"}
+	md := map[string]string{StreamKey: "EVENTS", AckWaitKey: "10s"}
 
-	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: okSubscriber}})
+	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}})
 	cons, err := stream.Consumer(context.Background(), "audit")
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +99,7 @@ func TestStart_NamedGroupConsumerCreatedThenUpdated(t *testing.T) {
 	}
 
 	md[AckWaitKey] = "20s"
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: okSubscriber}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}})
 	cons, err = stream.Consumer(context.Background(), "audit")
 	if err != nil {
 		t.Fatal(err)
@@ -121,8 +122,8 @@ func TestStart_CreateConsumerFalseUsesExistingConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := make(chan mesh.Message, 1)
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", CreateConsumerKey: "false", AckWaitKey: "10s"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+	md := map[string]string{StreamKey: "EVENTS", CreateConsumerKey: "false", AckWaitKey: "10s"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		got <- m
 		return nil
 	}}})
@@ -148,8 +149,8 @@ func TestStart_CreateConsumerFalseUsesExistingConsumer(t *testing.T) {
 func TestStart_CreateConsumerFalseMissingConsumer(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", CreateConsumerKey: "false"}
-	r := newRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: okSubscriber}})
+	md := map[string]string{StreamKey: "EVENTS", CreateConsumerKey: "false"}
+	r := newRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}})
 
 	if err := r.Start(context.Background()); !errors.Is(err, jetstream.ErrConsumerNotFound) {
 		t.Fatalf("want jetstream.ErrConsumerNotFound, got %v", err)
@@ -159,9 +160,9 @@ func TestStart_CreateConsumerFalseMissingConsumer(t *testing.T) {
 func TestStart_NoneSubscribersGetTheirOwnConsumers(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}
+	md := map[string]string{StreamKey: "EVENTS"}
 	for i := 0; i < 2; i++ {
-		startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: okSubscriber}})
+		startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: mesh.ConsumerGroupNone, Metadata: md, Handler: okSubscriber}})
 	}
 
 	info, err := stream.Info(context.Background())
@@ -213,10 +214,10 @@ func publishEvents(t *testing.T, url string, n int) {
 func TestConsume_NamedGroupInstancesSplitMessages(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit"}
+	md := map[string]string{StreamKey: "EVENTS"}
 	var a, b countingSubscriber
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: a.handle}})
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: b.handle}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: a.handle}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: b.handle}})
 
 	publishEvents(t, url, 10)
 	waitFor(t, func() bool { return a.total()+b.total() >= 10 })
@@ -235,8 +236,8 @@ func TestConsume_TwoGroupsEachReceiveEveryMessage(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
 	var a, b countingSubscriber
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit"}, Handler: a.handle}})
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "billing"}, Handler: b.handle}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: map[string]string{StreamKey: "EVENTS"}, Handler: a.handle}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "billing", Metadata: map[string]string{StreamKey: "EVENTS"}, Handler: b.handle}})
 
 	publishEvents(t, url, 5)
 	waitFor(t, func() bool { return a.total() >= 5 && b.total() >= 5 })
@@ -249,10 +250,10 @@ func TestConsume_TwoGroupsEachReceiveEveryMessage(t *testing.T) {
 func TestConsume_EveryNoneInstanceReceivesEveryMessage(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}
+	md := map[string]string{StreamKey: "EVENTS"}
 	var a, b countingSubscriber
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: a.handle}})
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: b.handle}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: mesh.ConsumerGroupNone, Metadata: md, Handler: a.handle}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: mesh.ConsumerGroupNone, Metadata: md, Handler: b.handle}})
 
 	publishEvents(t, url, 5)
 	waitFor(t, func() bool { return a.total() >= 5 && b.total() >= 5 })
@@ -276,8 +277,8 @@ func TestConsume_AckPolicyDouble(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
 	var s countingSubscriber
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", AckPolicyKey: "double", AckWaitKey: "1s"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: s.handle}})
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "double", AckWaitKey: "1s"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: s.handle}})
 
 	publishEvents(t, url, 1)
 	waitFor(t, func() bool { return s.total() == 1 && ackPending(t, stream, "audit") == 0 })
@@ -291,8 +292,8 @@ func TestConsume_AckPolicyExplicit(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
 	var s countingSubscriber
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", AckPolicyKey: "explicit", AckWaitKey: "1s"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: s.handle}})
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "explicit", AckWaitKey: "1s"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: s.handle}})
 
 	publishEvents(t, url, 1)
 	waitFor(t, func() bool { return s.total() == 1 && ackPending(t, stream, "audit") == 0 })
@@ -306,8 +307,8 @@ func TestConsume_AckPolicyNone(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
 	var calls atomic.Int32
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", AckPolicyKey: "none"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "none"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		calls.Add(1)
 		return errors.New("boom")
 	}}}, WithLogger(quietLogger()))
@@ -331,8 +332,8 @@ func TestConsume_OrderedConsumerReceivesEveryMessage(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
 	var s countingSubscriber
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: mesh.ConsumerGroupNone, AckPolicyKey: "none"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: s.handle}})
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "none"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: mesh.ConsumerGroupNone, Metadata: md, Handler: s.handle}})
 
 	publishEvents(t, url, 5)
 	waitFor(t, func() bool { return s.total() >= 5 })
@@ -345,8 +346,8 @@ func TestConsume_FailingHandlerRedeliveredUntilMaxDeliver(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
 	var calls atomic.Int32
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", MaxDeliverKey: "3"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+	md := map[string]string{StreamKey: "EVENTS", MaxDeliverKey: "3"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		calls.Add(1)
 		return errors.New("boom")
 	}}}, WithLogger(quietLogger()))
@@ -363,8 +364,8 @@ func TestConsume_PanickingHandlerRedelivered(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
 	var calls atomic.Int32
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+	md := map[string]string{StreamKey: "EVENTS"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		if calls.Add(1) == 1 {
 			panic("kaboom")
 		}
@@ -380,8 +381,8 @@ func TestConsume_NakDelayDelaysRedelivery(t *testing.T) {
 	createStream(t, url, "EVENTS", "test.event")
 	var mu sync.Mutex
 	var times []time.Time
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", NakDelayKey: "500ms"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+	md := map[string]string{StreamKey: "EVENTS", NakDelayKey: "500ms"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		mu.Lock()
 		defer mu.Unlock()
 		times = append(times, time.Now())
@@ -413,8 +414,8 @@ func TestConsume_DeliveryMetadata(t *testing.T) {
 		ok       bool
 	}
 	seen := make(chan seenDelivery, 1)
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit", AckWaitKey: "10s"}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+	md := map[string]string{StreamKey: "EVENTS", AckWaitKey: "10s"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		d, ok := ctx.Deadline()
 		seen <- seenDelivery{md: m.Metadata, deadline: d, ok: ok}
 		return nil
@@ -469,10 +470,27 @@ func TestStart_StreamCoveringEndpointSubject(t *testing.T) {
 	}
 }
 
-func TestStart_NoJetStreamSubscriberSkipsStreamCheck(t *testing.T) {
+func TestStart_StreamCoveringEndpointSubjectWithoutJetStreamSubscriber(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "REQUESTS", "test.echo")
 	r := newRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, []mesh.Subscriber{{Target: eventTarget, Handler: okSubscriber}})
+
+	if err := r.Start(context.Background()); !errors.Is(err, ErrStreamCoversRoute) {
+		t.Fatalf("want ErrStreamCoversRoute, got %v", err)
+	}
+}
+
+func TestStart_ServerWithoutJetStream(t *testing.T) {
+	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns.Start()
+	if !ns.ReadyForConnections(testWait) {
+		t.Fatal("nats-server did not become ready")
+	}
+	t.Cleanup(ns.Shutdown)
+	r := newRuntime(t, testConfig(ns.ClientURL()), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
 
 	if err := r.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -483,14 +501,14 @@ func TestStart_NoJetStreamSubscriberSkipsStreamCheck(t *testing.T) {
 func TestStop_NaksMessagesPastTheDrain(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
-	md := map[string]string{StreamKey: "EVENTS", mesh.ConsumerGroupKey: "audit"}
+	md := map[string]string{StreamKey: "EVENTS"}
 	logs := &logRecords{}
 	entered := make(chan struct{}, 2)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	cfg := testConfig(url)
 	cfg[ConcurrencyKey] = "1"
-	r := startRuntime(t, cfg, nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+	r := startRuntime(t, cfg, nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		entered <- struct{}{}
 		<-release
 		return nil
@@ -536,6 +554,6 @@ func TestStop_NaksMessagesPastTheDrain(t *testing.T) {
 	}
 
 	var s countingSubscriber
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: s.handle}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: s.handle}})
 	waitFor(t, func() bool { return s.total() >= 2 })
 }

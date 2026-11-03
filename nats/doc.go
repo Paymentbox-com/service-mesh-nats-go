@@ -37,17 +37,19 @@
 // A JetStream delivery also carries the Mesh-Nats- keys, such as
 // StreamMetadataKey.
 //
-// Endpoint and Subscriber metadata is read at construction.
-// mesh.ConsumerGroupKey in it selects the queue group, and StreamKey and the
-// other JetStream options configure a JetStream subscriber. A Target carries
-// no consumer group or deployment group, so a Target's metadata is not read
-// for either.
+// # Settings
+//
+// Each setting is read from the first of these that has it: the per-call
+// options of Request or Publish, the Endpoint's or Subscriber's Metadata,
+// the Target's Metadata, and this package's default. Endpoint and Subscriber
+// settings are read at construction. StreamKey and the other JetStream
+// options configure a JetStream subscriber.
 //
 // # Delivery
 //
 // A consumer group is a NATS queue group. Every endpoint and subscriber joins
 // the group named by the runtime's mesh.DeploymentGroupKey unless its own
-// mesh.ConsumerGroupKey overrides it.
+// ConsumerGroup field overrides it.
 // mesh.ConsumerGroupNone gives a plain subscription: every instance receives
 // every message, and for an endpoint every instance replies. Any other value
 // names the group. Two endpoints or subscribers on one subject are two

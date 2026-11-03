@@ -29,7 +29,13 @@ func TestNew_StreamOnEndpoint(t *testing.T) {
 }
 
 func TestNew_CreateConsumerFalseWithoutGroup(t *testing.T) {
-	err := newWithSubscriberMetadata(t, map[string]string{StreamKey: "S", CreateConsumerKey: "false", mesh.ConsumerGroupKey: mesh.ConsumerGroupNone})
+	c := testClient(t, testConfig(startServer(t)))
+	_, err := New(c, testConfig(""), nil, []mesh.Subscriber{{
+		Target:        eventTarget,
+		ConsumerGroup: mesh.ConsumerGroupNone,
+		Metadata:      map[string]string{StreamKey: "S", CreateConsumerKey: "false"},
+		Handler:       okSubscriber,
+	}})
 	if !errors.Is(err, ErrBadConfig) {
 		t.Fatalf("want ErrBadConfig, got %v", err)
 	}
@@ -126,7 +132,6 @@ func TestStart_SubscriberWithEveryOption(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
 	md := map[string]string{
-		mesh.ConsumerGroupKey:        "audit",
 		StreamKey:                    "EVENTS",
 		CreateConsumerKey:            "true",
 		AckPolicyKey:                 "explicit",
@@ -138,7 +143,7 @@ func TestStart_SubscriberWithEveryOption(t *testing.T) {
 		DeliverPolicyKey:             "new",
 		ConsumerInactiveThresholdKey: "1h",
 	}
-	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: okSubscriber}})
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}})
 
 	cons, err := stream.Consumer(context.Background(), "audit")
 	if err != nil {

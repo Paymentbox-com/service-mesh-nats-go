@@ -32,9 +32,10 @@ const (
 
 	// RequestTimeoutKey bounds a Request, and the wait for a JetStream
 	// publish ack, as a Go duration string. Default "30s". A context deadline
-	// that comes sooner bounds the call instead. Also accepted in the
-	// per-call options of Request and Publish, where it overrides the
-	// configured value for that call.
+	// that comes sooner bounds the call instead. Also read from the
+	// settings of Request and Publish, which are their per-call options over
+	// their Target's Metadata, where it overrides the configured value for
+	// that call.
 	RequestTimeoutKey = "request_timeout"
 
 	// ConcurrencyKey is the maximum number of handlers running at once across
@@ -49,9 +50,11 @@ const (
 	MaxDeliverKey = "max_deliver"
 )
 
-// JetStream options. StreamKey is read from Endpoint and Subscriber metadata
-// and from the per-call options of Request and Publish. The others are read
-// from Subscriber metadata that sets StreamKey, along with MaxDeliverKey.
+// JetStream options, read from settings. A Request's or Publish's settings
+// are its per-call options over its Target's Metadata, and an Endpoint's or
+// Subscriber's are its Metadata over its Target's Metadata. StreamKey is read
+// by Request, Publish, and New. The others are read from the settings of a
+// Subscriber that sets StreamKey, along with MaxDeliverKey.
 const (
 	// StreamKey names a JetStream stream. On Publish it sends a JetStream
 	// publish that expects this stream and waits for its ack. On a

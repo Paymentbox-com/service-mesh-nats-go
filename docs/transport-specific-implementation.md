@@ -24,13 +24,31 @@ constructor ignores the other's keys, so one `Config` can be given to both.
 | `url` | `NewClient` | `nats://127.0.0.1:4222` | The server URL, or a comma-separated list of them. An empty value takes the default. |
 | `name` | `NewClient` | none | The connection name reported to the server. |
 | `connect_timeout` | `NewClient` | `5s` | The bound on the initial connection, as a Go duration. |
-| `request_timeout` | `NewClient` | `30s` | The bound on `Request` and on the wait for a JetStream publish ack, as a Go duration. A context deadline that comes sooner bounds the call instead. It is also accepted as a per-call option. |
+| `request_timeout` | `NewClient` | `30s` | The bound on `Request` and on the wait for a JetStream publish ack, as a Go duration. A context deadline that comes sooner bounds the call instead. A target's metadata or a call's options can override it, as described under [Settings](#settings). |
 | `deployment_group` | `New` | required | The queue group that endpoints and subscribers join. |
 | `concurrency` | `New` | CPU count | The most handlers that run at once. |
 | `max_deliver` | `New` | `5` | The most times one JetStream message is delivered, for subscribers that do not set their own. |
 
 A value that does not parse returns `ErrBadConfig`. A logger is passed to `New`
 with `nats.WithLogger`, and defaults to `slog.Default()`.
+
+## Settings
+
+Settings that apply to one call, endpoint, or subscriber are read from the
+first of these that has them:
+
+1. The per-call options of `Request` or `Publish`.
+2. The `Endpoint`'s or `Subscriber`'s metadata.
+3. The `Target`'s metadata.
+4. The `Config` given to `NewClient` or `New`, or this package's default.
+
+`Request` and `Publish` read `request_timeout` and `stream`. `New` reads
+`stream` and the other JetStream options listed in
+[JetStream](jetstream.md#options). Endpoint and subscriber settings are read
+when `New` runs.
+
+`stream` in an endpoint's settings makes `New` return `ErrBadConfig`, and in
+a request's settings makes `Request` return `ErrBadConfig`.
 
 ## Metadata
 
@@ -55,17 +73,11 @@ value so a stream drops duplicates. On a message handed to a handler,
 A JetStream delivery also carries the keys this transport defines under
 `Mesh-Nats-`, listed in [JetStream](jetstream.md#delivery-metadata).
 
-Endpoint and subscriber metadata is read when `New` runs. Its
-`consumer_group` selects the queue group, and its `stream` and the other
-JetStream options configure a JetStream subscriber. `stream` on an endpoint
-returns `ErrBadConfig`. A `Target` carries no `consumer_group` or
-`deployment_group`, so a target's metadata is not read for either.
-
 ## Delivery
 
 A consumer group is a NATS queue group. Every endpoint and subscriber joins the
-runtime's `deployment_group` unless its own `consumer_group` overrides it. An
-empty `consumer_group` counts as unset.
+runtime's `deployment_group` unless its `ConsumerGroup` field names another
+group. An empty `ConsumerGroup` takes the runtime's `deployment_group`.
 
 `none` gives a plain subscription, so every instance handles every message, and
 for an endpoint every instance replies.
@@ -159,7 +171,7 @@ These are the errors this package defines.
 
 | Error | Returned when |
 |---|---|
-| `ErrBadConfig` | A configuration value, endpoint or subscriber option, or per-call option does not parse or does not apply where it is given. It is wrapped with the key and value. |
+| `ErrBadConfig` | A configuration value or a setting from a target, endpoint, subscriber, or call does not parse or does not apply where it is given. It is wrapped with the key and value. |
 | `ErrClosed` | `Request` or `Publish` is called on a client after `Close`, which for a runtime's client is after `Stop`, or `Start` is called on a runtime whose client is closed. |
 | `ErrAlreadyStarted` | `Start` is called on a running runtime. |
 | `ErrStopped` | `Start` is called on a runtime after `Stop`. |

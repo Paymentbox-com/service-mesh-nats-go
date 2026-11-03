@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
@@ -239,7 +240,7 @@ func (c *jsConsumer) deadline(arrival time.Time, delivered uint64) time.Time {
 }
 
 // checkEndpointStreams returns ErrStreamCoversRoute when a stream covers an
-// endpoint subject.
+// endpoint subject. A server without JetStream has no streams, so it passes.
 func checkEndpointStreams(ctx context.Context, js jetstream.JetStream, subs []subscription) error {
 	for _, b := range subs {
 		if b.endpoint == nil {
@@ -250,6 +251,10 @@ func checkEndpointStreams(ctx context.Context, js jetstream.JetStream, subs []su
 		case err == nil:
 			return fmt.Errorf("%w: subject %q, stream %q", ErrStreamCoversRoute, b.subject, name)
 		case errors.Is(err, jetstream.ErrStreamNotFound):
+		case errors.Is(err, natsio.ErrNoResponders),
+			errors.Is(err, jetstream.ErrJetStreamNotEnabled),
+			errors.Is(err, jetstream.ErrJetStreamNotEnabledForAccount):
+			return nil
 		default:
 			return err
 		}

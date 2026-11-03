@@ -5,27 +5,28 @@ for a stream to confirm that it stored the message, and a subscriber can
 consume from a JetStream consumer, so a message stays in the stream until a
 handler has finished with it.
 
-JetStream is turned on per call and per subscriber with the `stream` option.
-One client and one runtime carry both core NATS and JetStream traffic.
+JetStream is turned on with the `stream` setting, usually carried in the
+target's metadata. One client and one runtime carry both core NATS and
+JetStream traffic.
 
 ## Topic Targets Only
 
-JetStream applies to topic targets. A stream never covers a route subject or
-an inbox subject.
+JetStream applies to topic targets only, as endpoints are much less likely
+to need durability due to their synchronous nature. JetStream support for
+endpoints may be added in the future if a compelling reason for it is found.
 
-A stream that covers a route subject stores every request and answers the
-requester with its publish ack. That ack races the endpoint's reply and
-usually wins, so the caller reads the ack as the reply while the handler
-still runs. A stopped endpoint also goes unnoticed, because the stream
-answers in its place.
+A stream must also never cover an endpoint's subject. Such a stream stores
+each request and sends its publish ack to the requester. That ack races the
+endpoint's reply and usually wins, so the caller reads the ack as the reply
+while the handler still runs. When the endpoint is down, the stream still
+answers, so the outage goes unnoticed.
 
 These rules follow:
 
-- `stream` on an `Endpoint` makes `New` return `ErrBadConfig`.
-- `stream` in the options of a `Request` returns `ErrBadConfig`.
-- A runtime with a JetStream subscriber checks at `Start` that no stream
-  covers its endpoint subjects, as described under
-  [The Boot Check](#the-boot-check).
+- `stream` in an `Endpoint`'s settings makes `New` return `ErrBadConfig`.
+- `stream` in a `Request`'s settings returns `ErrBadConfig`.
+- Every runtime checks at `Start` that no stream covers its endpoint
+  subjects, as described under [The Boot Check](#the-boot-check).
 
 ## Streams
 
@@ -34,12 +35,16 @@ start. `Start` fails with the nats.go error when a subscriber's stream does
 not exist.
 
 Each JetStream topic target has its own stream, which holds exactly that
-target's subject and no wildcards. Consumer names are scoped to their stream,
-which is what lets a consumer take its consumer group's name.
+target's subject and no wildcards.
 
-`stream` is a property of the target. Every publisher and subscriber of a
-target sets the same `stream`, so all of a subject's subscribers consume from
-the stream, and a publish whose stream is missing fails right away.
+A named consumer group's consumer is named after the group. A consumer name
+only has to be unique within its stream, and each target has its own stream.
+So a group that subscribes to several targets has one consumer on each
+target's stream, all with the group's name, and they never collide.
+
+`stream` is a property of the target, carried in its metadata. Publishers
+and subscribers do not override it, so every subscriber of a subject consumes
+from the stream, and a publish whose stream is missing fails right away.
 
 The stream's retention decides how long it keeps a message:
 
@@ -51,10 +56,19 @@ The stream's retention decides how long it keeps a message:
 
 ## Options
 
-All values are strings. `stream` is read from `Publish` options and from
-subscriber metadata. The others are read from the metadata of a subscriber
-that sets `stream`, and ignored everywhere else. Durations are Go durations
-such as `"2m"`.
+All values are strings, and durations are Go durations such as `"2m"`.
+
+Each setting is read from the first of these that has it:
+
+1. The per-call options of `Request` or `Publish`.
+2. The `Endpoint`'s or `Subscriber`'s metadata.
+3. The `Target`'s metadata.
+4. The default in the table below.
+
+The target's metadata holds the settings declared for the target, and the
+other two override them for one call or one subscriber. `stream` and
+`request_timeout` are read by `Publish`. The others are read from the
+settings of a subscriber that has `stream`, and ignored everywhere else.
 
 | Key | Read by | Default | Meaning |
 |---|---|---|---|
@@ -72,7 +86,7 @@ such as `"2m"`.
 
 A value that does not parse, or is not one of its allowed values, makes `New`
 return `ErrBadConfig`. So does `create_consumer = "false"` on a subscriber
-whose consumer group is `none`.
+whose `ConsumerGroup` is `none`.
 
 The consumer settings default to nats.go's defaults, except `max_deliver` and
 the inactive threshold of a named group. nats.go's `max_deliver` is
@@ -81,7 +95,7 @@ unlimited, which would send a message that never decodes again forever.
 ## Publishing
 
 A plain `Publish` to a subject a stream covers is stored, with no ack. When
-the options set `stream`, `Publish` sends a JetStream publish with
+the publish's settings have `stream`, `Publish` sends a JetStream publish with
 `Nats-Expected-Stream` set to the stream, so a subject that lands in a
 different stream fails. It waits for the ack, bounded by `request_timeout` or
 the context's deadline, whichever comes first.
@@ -115,8 +129,9 @@ consumer:
   anew at each `Start`.
 
 A restarted `none` instance creates a new consumer, which starts where
-`deliver_policy` says, and does not resume its old one. An application that wants a stable consumer per instance gives each instance
-its own consumer group.
+`deliver_policy` says, and does not resume its old one. An application that
+wants a stable consumer per instance gives each instance its own consumer
+group.
 
 A `none` subscriber with `ack_policy = "none"` uses nats.go's ordered
 consumer. nats.go detects gaps in delivery and replaces the consumer from the
@@ -245,12 +260,71 @@ group, and fails with the nats.go error when it does not exist. It reads the
 consumer's settings from the server and ignores the subscriber's consumer
 settings.
 
+## Inspecting Streams and Consumers
+
+The client and the runtime give access to JetStream state outside a handler.
+
+| Name | Returns |
+|---|---|
+| `(*Client).Conn()` | The client's `*nats.Conn`. |
+| `(*Client).JetStream()` | The `jetstream.JetStream` the client publishes with. |
+| `(*Client).Stream(ctx, target)` | The stream named by the target's `stream`, or nil and no error when the target has none. |
+| `(*Runtime).Subscriber(target)` | The runtime's `*nats.Subscriber` for the target while the runtime is running, or false when it is not running or has no subscriber for the target. |
+| `(*Subscriber).Target()` | The subscriber's target. |
+| `(*Subscriber).ConsumerGroup()` | The resolved consumer group. |
+| `(*Subscriber).Stream(ctx)` | The stream named by the subscriber's settings, or nil and no error when they have no `stream`. |
+| `(*Subscriber).Consumer()` | The `jetstream.Consumer` the subscriber pulls from, or nil when its settings have no `stream`. |
+
+`Client.Stream` reads the target, so it names the stream a publish to the
+target uses. A subscriber's `Stream` reads the subscriber's settings, so it
+names the stream the subscriber consumes. `Client.Stream` and
+`Subscriber.Stream` return `ErrClosed` after the client is closed, and a
+lookup failure as the nats.go error unchanged.
+
+For an ordered or `none` consumer, `Subscriber.Consumer` is the only way to
+reach the consumer, because nats.go names it at each `Start`. For an ordered
+consumer, `Info` describes the consumer nats.go is using at the time of the
+call.
+
+A process that loads everything in a stream before it serves can wait on
+the subscriber's consumer after `Start`:
+
+```go
+sub, _ := rt.Subscriber(target)
+for {
+    info, err := sub.Consumer().Info(ctx)
+    if err != nil { /* ... */ }
+    if info.NumPending == 0 && info.NumAckPending == 0 {
+        break
+    }
+    time.Sleep(100 * time.Millisecond)
+}
+```
+
+With `double` or `explicit` acks, no pending and no unacked messages means
+every message up to that point was handled. With `ack_policy = "none"`,
+nothing is acked, so the check shows only that every message was delivered,
+while handlers may still be running.
+
+`Conn` returns the connection the client and the runtime use. Closing or
+draining it directly ends the client, and for a runtime built from the
+client, its subscriptions and consumers. `Request` and `Publish` then return
+the nats.go error rather than `ErrClosed`.
+
 ## The Boot Check
 
-When a runtime has at least one JetStream subscriber, `Start` looks up each
-endpoint subject's stream. When a stream covers one, `Start` returns
-`ErrStreamCoversRoute`, wrapped with the subject and the stream name. A
-runtime with no JetStream subscriber skips the check.
+`Start` looks up each endpoint subject's stream. When a stream covers one,
+`Start` returns `ErrStreamCoversRoute`, wrapped with the subject and the
+stream name.
+
+The settings rules catch `stream` on an endpoint or a request. The boot
+check catches a stream already on the server that covers an endpoint
+subject, such as one created by hand with a wildcard subject. Such a stream
+answers plain core requests, whatever settings the caller and the endpoint
+use.
+
+A server without JetStream has no streams, so the check passes. A runtime
+with no endpoints makes no lookups.
 
 ## Stopping
 

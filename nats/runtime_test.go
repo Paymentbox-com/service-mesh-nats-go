@@ -191,25 +191,25 @@ func TestPublish_CancelledContext(t *testing.T) {
 
 func TestPublish_ConsumerGroups(t *testing.T) {
 	// Two runtimes, each with one subscriber, and one published message.
-	none := map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}
-	shared := map[string]string{mesh.ConsumerGroupKey: "order-consumers"}
+	none := mesh.ConsumerGroupNone
+	shared := "order-consumers"
 	cases := []struct {
-		name          string
-		groups        [2]string
-		metadata      [2]map[string]string
-		wantDelivered int32
+		name           string
+		groups         [2]string
+		consumerGroups [2]string
+		wantDelivered  int32
 	}{
-		{name: "same deployment, key absent: one instance handles it", groups: [2]string{"billing", "billing"}, wantDelivered: 1},
-		{name: "different deployments, key absent: each deployment handles it", groups: [2]string{"billing", "audit"}, wantDelivered: 2},
-		{name: "same deployment, none: every instance handles it", groups: [2]string{"billing", "billing"}, metadata: [2]map[string]string{none, none}, wantDelivered: 2},
-		{name: "different deployments, shared named group: one instance handles it", groups: [2]string{"billing", "audit"}, metadata: [2]map[string]string{shared, shared}, wantDelivered: 1},
+		{name: "same deployment, group empty: one instance handles it", groups: [2]string{"billing", "billing"}, wantDelivered: 1},
+		{name: "different deployments, group empty: each deployment handles it", groups: [2]string{"billing", "audit"}, wantDelivered: 2},
+		{name: "same deployment, none: every instance handles it", groups: [2]string{"billing", "billing"}, consumerGroups: [2]string{none, none}, wantDelivered: 2},
+		{name: "different deployments, shared named group: one instance handles it", groups: [2]string{"billing", "audit"}, consumerGroups: [2]string{shared, shared}, wantDelivered: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			url := startServer(t)
 			var received atomic.Int32
 			for i := 0; i < 2; i++ {
-				sub := mesh.Subscriber{Target: eventTarget, Metadata: tc.metadata[i], Handler: func(ctx context.Context, m mesh.Message) error {
+				sub := mesh.Subscriber{Target: eventTarget, ConsumerGroup: tc.consumerGroups[i], Handler: func(ctx context.Context, m mesh.Message) error {
 					received.Add(1)
 					return nil
 				}}
@@ -230,12 +230,13 @@ func TestPublish_ConsumerGroups(t *testing.T) {
 }
 
 func TestPublish_ConsumerGroupOnTargetIsIgnored(t *testing.T) {
-	// A Target carries no consumer group, so both subscribers join the
+	// A consumer group comes only from the subscriber's field, so a
+	// "consumer_group" key on the target is ignored. Both subscribers join the
 	// runtimes' shared deployment group and one of them handles the event.
 	url := startServer(t)
 	var received atomic.Int32
 	for _, group := range []string{"a", "b"} {
-		target := mesh.Target{Segments: eventTarget.Segments, Kind: mesh.KindTopic, Metadata: map[string]string{mesh.ConsumerGroupKey: group}}
+		target := mesh.Target{Segments: eventTarget.Segments, Kind: mesh.KindTopic, Metadata: map[string]string{"consumer_group": group}}
 		startRuntime(t, mesh.Config{URLKey: url, mesh.DeploymentGroupKey: "same"}, nil, []mesh.Subscriber{{Target: target, Handler: func(ctx context.Context, m mesh.Message) error {
 			received.Add(1)
 			return nil
