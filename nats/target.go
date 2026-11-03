@@ -50,6 +50,23 @@ func checkKind(t mesh.Target, want mesh.Kind, use string) error {
 	return nil
 }
 
+// prepareSubscription validates t for use and returns its subscription, with
+// the queue group resolved from group and deploymentGroup.
+func prepareSubscription(t mesh.Target, want mesh.Kind, use, group, deploymentGroup string) (subscription, error) {
+	if err := checkKind(t, want, use); err != nil {
+		return subscription{}, err
+	}
+	subj, err := subject(t)
+	if err != nil {
+		return subscription{}, err
+	}
+	return subscription{
+		subject: subj,
+		queue:   consumerGroup(group, deploymentGroup),
+		target:  t,
+	}, nil
+}
+
 // consumerGroup resolves the NATS queue group of an Endpoint or Subscriber
 // from its ConsumerGroup, falling back to the runtime's deployment group.
 // The empty string means a plain subscription with no group.

@@ -75,87 +75,143 @@ func parseJetStream(md map[string]string, subj, group string, maxDeliver int) (*
 	if stream == "" {
 		return nil, nil
 	}
-	s := &jsSettings{stream: stream, group: group, create: true}
-
-	switch v, ok := md[CreateConsumerKey]; {
-	case !ok || v == "true":
-	case v == "false":
-		if group == "" {
-			return nil, fmt.Errorf("%w: %s=%q needs a named consumer group", ErrBadConfig, CreateConsumerKey, v)
-		}
-		s.create = false
-	default:
-		return nil, fmt.Errorf("%w: %s=%q must be \"true\" or \"false\"", ErrBadConfig, CreateConsumerKey, v)
-	}
-
-	switch v, ok := md[AckPolicyKey]; {
-	case !ok || v == "double":
-	case v == "explicit":
-		s.ack = ackExplicit
-	case v == "none":
-		s.ack = ackNone
-	default:
-		return nil, fmt.Errorf("%w: %s=%q must be \"double\", \"explicit\", or \"none\"", ErrBadConfig, AckPolicyKey, v)
-	}
-
-	deliver := jetstream.DeliverAllPolicy
-	switch v, ok := md[DeliverPolicyKey]; {
-	case !ok || v == "all":
-	case v == "new":
-		deliver = jetstream.DeliverNewPolicy
-	default:
-		return nil, fmt.Errorf("%w: %s=%q must be \"all\" or \"new\"", ErrBadConfig, DeliverPolicyKey, v)
-	}
-
-	inactive := namedInactiveThreshold
-	switch {
-	case s.ordered():
-		inactive = orderedInactiveThreshold
-	case group == "":
-		inactive = 0
-	}
+	s := &jsSettings{stream: stream, group: group}
 
 	var err error
+	if s.create, err = createConsumerSetting(md, group); err != nil {
+		return nil, err
+	}
+	if s.ack, err = ackPolicySetting(md); err != nil {
+		return nil, err
+	}
 	if s.nakDelay, err = durationSetting(md, NakDelayKey, 0); err != nil {
 		return nil, err
 	}
-	if inactive, err = durationSetting(md, ConsumerInactiveThresholdKey, inactive); err != nil {
+	if s.config, err = consumerConfig(md, subj, s, maxDeliver); err != nil {
 		return nil, err
 	}
-	ackWait, err := durationSetting(md, AckWaitKey, 0)
+	return s, nil
+}
+
+// createConsumerSetting reads CreateConsumerKey. "false" needs a named
+// consumer group, because a none consumer cannot exist before Start.
+func createConsumerSetting(md map[string]string, group string) (bool, error) {
+	switch v, ok := md[CreateConsumerKey]; {
+	case !ok || v == "true":
+		return true, nil
+	case v == "false":
+		if group == "" {
+			return false, fmt.Errorf("%w: %s=%q needs a named consumer group", ErrBadConfig, CreateConsumerKey, v)
+		}
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w: %s=%q must be \"true\" or \"false\"", ErrBadConfig, CreateConsumerKey, v)
+	}
+}
+
+// ackPolicySetting reads AckPolicyKey.
+func ackPolicySetting(md map[string]string) (ackPolicy, error) {
+	switch v, ok := md[AckPolicyKey]; {
+	case !ok || v == "double":
+		return ackDouble, nil
+	case v == "explicit":
+		return ackExplicit, nil
+	case v == "none":
+		return ackNone, nil
+	default:
+		return 0, fmt.Errorf("%w: %s=%q must be \"double\", \"explicit\", or \"none\"", ErrBadConfig, AckPolicyKey, v)
+	}
+}
+
+// deliverPolicySetting reads DeliverPolicyKey.
+func deliverPolicySetting(md map[string]string) (jetstream.DeliverPolicy, error) {
+	switch v, ok := md[DeliverPolicyKey]; {
+	case !ok || v == "all":
+		return jetstream.DeliverAllPolicy, nil
+	case v == "new":
+		return jetstream.DeliverNewPolicy, nil
+	default:
+		return 0, fmt.Errorf("%w: %s=%q must be \"all\" or \"new\"", ErrBadConfig, DeliverPolicyKey, v)
+	}
+}
+
+// defaultInactiveThreshold is the inactive threshold when
+// ConsumerInactiveThresholdKey is unset. Zero takes the server's default.
+func (s *jsSettings) defaultInactiveThreshold() time.Duration {
+	switch {
+	case s.ordered():
+		return orderedInactiveThreshold
+	case s.group == "":
+		return 0
+	default:
+		return namedInactiveThreshold
+	}
+}
+
+// consumerConfig builds the settings the runtime sends to the server for the
+// subscriber's consumer. The ack settings are read and checked whatever the
+// ack policy, and sent only when the consumer acks.
+func consumerConfig(md map[string]string, subj string, s *jsSettings, maxDeliver int) (jetstream.ConsumerConfig, error) {
+	deliver, err := deliverPolicySetting(md)
 	if err != nil {
-		return nil, err
+		return jetstream.ConsumerConfig{}, err
 	}
-	if maxDeliver, err = positiveIntSetting(md, MaxDeliverKey, maxDeliver); err != nil {
-		return nil, err
-	}
-	maxAckPending, err := positiveIntSetting(md, MaxAckPendingKey, 0)
+	inactive, err := durationSetting(md, ConsumerInactiveThresholdKey, s.defaultInactiveThreshold())
 	if err != nil {
-		return nil, err
+		return jetstream.ConsumerConfig{}, err
 	}
-	backoff, err := backoffSetting(md)
+	ack, err := ackSettings(md, maxDeliver)
 	if err != nil {
-		return nil, err
+		return jetstream.ConsumerConfig{}, err
 	}
-	if s.create && s.ack != ackNone && len(backoff) >= maxDeliver {
-		return nil, fmt.Errorf("%w: %s=%d must exceed the %d entries of %s", ErrBadConfig, MaxDeliverKey, maxDeliver, len(backoff), BackoffKey)
+	if s.create && s.ack != ackNone && len(ack.backoff) >= ack.maxDeliver {
+		return jetstream.ConsumerConfig{}, fmt.Errorf("%w: %s=%d must exceed the %d entries of %s", ErrBadConfig, MaxDeliverKey, ack.maxDeliver, len(ack.backoff), BackoffKey)
 	}
 
-	s.config = jetstream.ConsumerConfig{
-		Durable:           group,
+	cfg := jetstream.ConsumerConfig{
+		Durable:           s.group,
 		FilterSubject:     subj,
 		DeliverPolicy:     deliver,
 		AckPolicy:         jetstream.AckNonePolicy,
 		InactiveThreshold: inactive,
 	}
 	if s.ack != ackNone {
-		s.config.AckPolicy = jetstream.AckExplicitPolicy
-		s.config.AckWait = ackWait
-		s.config.MaxDeliver = maxDeliver
-		s.config.BackOff = backoff
-		s.config.MaxAckPending = maxAckPending
+		cfg.AckPolicy = jetstream.AckExplicitPolicy
+		cfg.AckWait = ack.wait
+		cfg.MaxDeliver = ack.maxDeliver
+		cfg.BackOff = ack.backoff
+		cfg.MaxAckPending = ack.maxAckPending
 	}
-	return s, nil
+	return cfg, nil
+}
+
+// ackSettingValues are the consumer settings that apply only when the
+// consumer acks.
+type ackSettingValues struct {
+	wait          time.Duration
+	maxDeliver    int
+	maxAckPending int
+	backoff       []time.Duration
+}
+
+// ackSettings reads AckWaitKey, MaxDeliverKey, MaxAckPendingKey, and
+// BackoffKey. maxDeliver is the runtime's default.
+func ackSettings(md map[string]string, maxDeliver int) (ackSettingValues, error) {
+	var a ackSettingValues
+	var err error
+	if a.wait, err = durationSetting(md, AckWaitKey, 0); err != nil {
+		return ackSettingValues{}, err
+	}
+	if a.maxDeliver, err = positiveIntSetting(md, MaxDeliverKey, maxDeliver); err != nil {
+		return ackSettingValues{}, err
+	}
+	if a.maxAckPending, err = positiveIntSetting(md, MaxAckPendingKey, 0); err != nil {
+		return ackSettingValues{}, err
+	}
+	if a.backoff, err = backoffSetting(md); err != nil {
+		return ackSettingValues{}, err
+	}
+	return a, nil
 }
 
 // backoffSetting reads BackoffKey from md as a comma-separated list of

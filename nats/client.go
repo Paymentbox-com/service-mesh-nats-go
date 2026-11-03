@@ -131,9 +131,9 @@ func (c *Client) Request(ctx context.Context, msg mesh.Message, opts map[string]
 //
 // Settings are opts over msg.Target's Metadata. When they carry StreamKey,
 // Publish sends a JetStream publish that expects that stream and waits for
-// its ack, bounded like Request, and RequestTimeoutKey in them applies. The ack's error or the nats.go error is
-// returned unchanged, except that expiry of the request timeout is reported
-// as natsio.ErrTimeout.
+// its ack, bounded like Request, and RequestTimeoutKey in them applies. The
+// ack's error or the nats.go error is returned unchanged, except that expiry
+// of the request timeout is reported as natsio.ErrTimeout.
 func (c *Client) Publish(ctx context.Context, msg mesh.Message, opts map[string]string) error {
 	if err := checkKind(msg.Target, mesh.KindTopic, "Publish"); err != nil {
 		return err

@@ -5,13 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	natsio "github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
@@ -105,23 +103,8 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 		pending: map[*delivery]struct{}{},
 	}
 
-	prepare := func(t mesh.Target, want mesh.Kind, use, group string) (subscription, error) {
-		if err := checkKind(t, want, use); err != nil {
-			return subscription{}, err
-		}
-		subj, err := subject(t)
-		if err != nil {
-			return subscription{}, err
-		}
-		return subscription{
-			subject: subj,
-			queue:   consumerGroup(group, s.deploymentGroup),
-			target:  t,
-		}, nil
-	}
-
 	for _, e := range endpoints {
-		b, err := prepare(e.Target, mesh.KindRoute, "Endpoint", e.ConsumerGroup)
+		b, err := prepareSubscription(e.Target, mesh.KindRoute, "Endpoint", e.ConsumerGroup, s.deploymentGroup)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +118,7 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 		r.subscriptions = append(r.subscriptions, b)
 	}
 	for _, sub := range subscribers {
-		b, err := prepare(sub.Target, mesh.KindTopic, "Subscriber", sub.ConsumerGroup)
+		b, err := prepareSubscription(sub.Target, mesh.KindTopic, "Subscriber", sub.ConsumerGroup, s.deploymentGroup)
 		if err != nil {
 			return nil, err
 		}
@@ -150,92 +133,6 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 		r.subscriptions = append(r.subscriptions, b)
 	}
 	return r, nil
-}
-
-// ServiceMap returns the client's map. This runtime does not otherwise use
-// it.
-func (r *Runtime) ServiceMap() mesh.ServiceMap {
-	return r.client.ServiceMap()
-}
-
-// Client returns the client this runtime was built from, in every state.
-// Its Request and Publish return ErrClosed after Stop. Closing it directly
-// ends the runtime's connection.
-func (r *Runtime) Client() mesh.Client {
-	return r.client
-}
-
-// Subscriber is a subscriber the runtime is running. It reads the settings
-// the runtime uses, which are the mesh.Subscriber's Metadata over its
-// Target's Metadata.
-type Subscriber struct {
-	client   *Client
-	sub      *subscription
-	consumer *jsConsumer
-}
-
-// Subscriber returns the runtime's subscriber for target, while the runtime
-// is running. It reports false when the runtime is not running or has no
-// subscriber for target.
-func (r *Runtime) Subscriber(target mesh.Target) (*Subscriber, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.state != stateRunning {
-		return nil, false
-	}
-	for i := range r.subscriptions {
-		b := &r.subscriptions[i]
-		if b.subscriber == nil || !b.target.Equal(target) {
-			continue
-		}
-		s := &Subscriber{client: r.client, sub: b}
-		for _, c := range r.consumers {
-			if c.sub == b {
-				s.consumer = c
-			}
-		}
-		return s, true
-	}
-	return nil, false
-}
-
-// Target returns the subscriber's target.
-func (s *Subscriber) Target() mesh.Target {
-	return s.sub.target
-}
-
-// ConsumerGroup returns the resolved consumer group: the mesh.Subscriber's
-// ConsumerGroup, or the runtime's deployment group when that is empty.
-func (s *Subscriber) ConsumerGroup() string {
-	if s.sub.queue == "" {
-		return mesh.ConsumerGroupNone
-	}
-	return s.sub.queue
-}
-
-// Stream returns the stream named by the subscriber's settings, or nil and
-// no error when they have no StreamKey. It returns ErrClosed after the
-// runtime's client is closed, and a lookup failure as the nats.go error
-// unchanged.
-func (s *Subscriber) Stream(ctx context.Context) (jetstream.Stream, error) {
-	if s.sub.js == nil {
-		return nil, nil
-	}
-	_, js, err := s.client.connections()
-	if err != nil {
-		return nil, err
-	}
-	return js.Stream(ctx, s.sub.js.stream)
-}
-
-// Consumer returns the consumer the subscriber pulls from, or nil when its
-// settings have no StreamKey. For an ordered consumer, Info describes the
-// consumer nats.go is using at the time of the call.
-func (s *Subscriber) Consumer() jetstream.Consumer {
-	if s.consumer == nil {
-		return nil
-	}
-	return s.consumer.consumer
 }
 
 // Running reports whether Start has succeeded and Stop has not run.
@@ -258,16 +155,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	switch r.state {
-	case stateRunning:
-		return ErrAlreadyStarted
-	case stateStopped:
-		return ErrStopped
-	}
-	if err := ctx.Err(); err != nil {
+	if err := r.checkStartable(ctx); err != nil {
 		return err
 	}
-
 	nc, js, err := r.client.connections()
 	if err != nil {
 		return err
@@ -276,53 +166,14 @@ func (r *Runtime) Start(ctx context.Context) error {
 	r.handlerCtx, r.cancelHandlers = context.WithCancel(context.Background())
 	r.setAccepting(true)
 
-	subs := make([]*natsio.Subscription, 0, len(r.subscriptions))
-	var consumers []*jsConsumer
-	fail := func(err error) error {
-		for _, s := range subs {
-			_ = s.Unsubscribe()
-		}
-		for _, c := range consumers {
-			c.cc.Stop()
-		}
-		r.cancelHandlers()
-		r.setAccepting(false)
+	subs, consumers, err := r.openReceivers(ctx, nc, js)
+	if err == nil {
+		// Ensure the server has every subscription before Start returns.
+		err = flush(ctx, nc, flushBudget)
+	}
+	if err != nil {
+		r.abortStart(subs, consumers)
 		return err
-	}
-
-	if err := checkEndpointStreams(ctx, js, r.subscriptions); err != nil {
-		return fail(err)
-	}
-
-	for i := range r.subscriptions {
-		b := &r.subscriptions[i]
-		if b.js != nil {
-			c, err := r.consume(ctx, js, b)
-			if err != nil {
-				return fail(err)
-			}
-			consumers = append(consumers, c)
-			continue
-		}
-		cb := func(m *natsio.Msg) {
-			arrival := time.Now()
-			r.dispatch(false, func() { r.serve(nc, b, m, arrival) })
-		}
-		var sub *natsio.Subscription
-		if b.queue == "" {
-			sub, err = nc.Subscribe(b.subject, cb)
-		} else {
-			sub, err = nc.QueueSubscribe(b.subject, b.queue, cb)
-		}
-		if err != nil {
-			return fail(err)
-		}
-		subs = append(subs, sub)
-	}
-
-	// Ensure the server has every subscription before Start returns.
-	if err := flush(ctx, nc, flushBudget); err != nil {
-		return fail(err)
 	}
 
 	r.subs = subs
@@ -332,23 +183,16 @@ func (r *Runtime) Start(ctx context.Context) error {
 	return nil
 }
 
-// consume opens a JetStream subscriber's consumer and begins consuming it
-// with nats.go's default pull settings.
-func (r *Runtime) consume(ctx context.Context, js jetstream.JetStream, b *subscription) (*jsConsumer, error) {
-	c, err := openConsumer(ctx, js, b)
-	if err != nil {
-		return nil, err
+// checkStartable returns ErrAlreadyStarted on a running runtime, ErrStopped
+// after Stop, and ctx's error when ctx is done.
+func (r *Runtime) checkStartable(ctx context.Context) error {
+	switch r.state {
+	case stateRunning:
+		return ErrAlreadyStarted
+	case stateStopped:
+		return ErrStopped
 	}
-	c.cc, err = c.consumer.Consume(
-		func(m jetstream.Msg) { r.receive(c, m) },
-		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
-			r.logger.Warn("nats: consume error", "subject", b.subject, "stream", b.js.stream, "error", err)
-		}),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
+	return ctx.Err()
 }
 
 // Stop stops receiving, waits for in-flight handlers until ctx is done,
@@ -417,251 +261,6 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	r.subs = nil
 	r.consumers = nil
 	return drainErr
-}
-
-func (r *Runtime) isAccepting(jetStream bool) bool {
-	r.acceptMu.RLock()
-	defer r.acceptMu.RUnlock()
-	return r.acceptingLocked(jetStream)
-}
-
-func (r *Runtime) acceptingLocked(jetStream bool) bool {
-	if jetStream {
-		return r.jsAccepting
-	}
-	return r.accepting
-}
-
-func (r *Runtime) setAccepting(on bool) {
-	r.acceptMu.Lock()
-	r.accepting = on
-	r.jsAccepting = on
-	r.acceptMu.Unlock()
-}
-
-// waitConsumersClosed waits until every consumer has stopped delivering, or
-// budget passes.
-func waitConsumersClosed(consumers []*jsConsumer, budget time.Duration) {
-	timeout := time.After(budget)
-	for _, c := range consumers {
-		select {
-		case <-c.cc.Closed():
-		case <-timeout:
-			return
-		}
-	}
-}
-
-// dispatch runs fn on its own goroutine, bounded by the concurrency
-// semaphore and tracked for drain. It reports false, and does not run fn,
-// for a message arriving after its kind of subscription stopped accepting.
-func (r *Runtime) dispatch(jetStream bool, fn func()) bool {
-	if !r.isAccepting(jetStream) {
-		return false
-	}
-	select {
-	case r.sem <- struct{}{}:
-	case <-r.handlerCtx.Done():
-		return false
-	}
-
-	// Checked again under the lock, so no handler is added to wg once Stop
-	// has begun waiting.
-	r.acceptMu.RLock()
-	if !r.acceptingLocked(jetStream) {
-		r.acceptMu.RUnlock()
-		<-r.sem
-		return false
-	}
-	r.wg.Add(1)
-	r.acceptMu.RUnlock()
-
-	go func() {
-		defer r.wg.Done()
-		defer func() { <-r.sem }()
-		fn()
-	}()
-	return true
-}
-
-// serve handles a message from a core subscription. arrival is when it
-// reached the callback.
-func (r *Runtime) serve(nc *natsio.Conn, b *subscription, m *natsio.Msg, arrival time.Time) {
-	in := mesh.Message{Target: b.target, Metadata: incomingMetadata(m.Header), Payload: m.Data}
-
-	if b.subscriber != nil {
-		if err := callSubscriber(r.handlerCtx, b.subscriber, in); err != nil {
-			r.logger.Error("nats: subscriber handler failed", "subject", b.subject, "error", err)
-		}
-		return
-	}
-
-	ctx := r.handlerCtx
-	if v, ok := in.Metadata[mesh.TimeoutKey]; ok {
-		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= 0 {
-			deadline := arrival.Add(time.Duration(ms) * time.Millisecond)
-			in.Metadata[mesh.DeadlineKey] = deadline.Format(time.RFC3339Nano)
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, deadline)
-			defer cancel()
-		}
-	}
-
-	out, err := callEndpoint(ctx, b.endpoint, in)
-	if err != nil {
-		r.logger.Error("nats: endpoint handler failed", "subject", b.subject, "error", err)
-	}
-	if m.Reply == "" {
-		return
-	}
-
-	reply := &natsio.Msg{Subject: m.Reply}
-	if err != nil {
-		reply.Header = natsio.Header{}
-		reply.Header.Set(mesh.HandlerErrorKey, err.Error())
-	} else {
-		reply.Header = toHeader(out.Metadata)
-		reply.Data = out.Payload
-	}
-	if err := nc.PublishMsg(reply); err != nil {
-		r.logger.Error("nats: reply failed", "subject", b.subject, "error", err)
-	}
-}
-
-// receive is the Consume callback of a JetStream consumer.
-func (r *Runtime) receive(c *jsConsumer, m jetstream.Msg) {
-	d := &delivery{consumer: c, msg: m, arrival: time.Now()}
-	if c.acks {
-		r.pendingMu.Lock()
-		r.pending[d] = struct{}{}
-		r.pendingMu.Unlock()
-	}
-	if !r.dispatch(true, func() { r.serveJetStream(d) }) && c.acks {
-		r.abandon(d)
-	}
-}
-
-// serveJetStream handles a JetStream message and settles it by its result.
-func (r *Runtime) serveJetStream(d *delivery) {
-	c, b := d.consumer, d.consumer.sub
-	if c.acks && !d.begin() {
-		return
-	}
-
-	in := mesh.Message{Target: b.target, Metadata: incomingMetadata(d.msg.Headers()), Payload: d.msg.Data()}
-	ctx := r.handlerCtx
-	meta, err := d.msg.Metadata()
-	if err != nil {
-		r.logger.Warn("nats: message has no JetStream metadata", "subject", b.subject, "error", err)
-	} else {
-		deliveryMetadata(in.Metadata, meta)
-		if c.acks {
-			deadline := c.deadline(d.arrival, meta.NumDelivered)
-			in.Metadata[mesh.DeadlineKey] = deadline.Format(time.RFC3339Nano)
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, deadline)
-			defer cancel()
-		}
-	}
-
-	herr := callSubscriber(ctx, b.subscriber, in)
-	if herr != nil {
-		r.logger.Error("nats: subscriber handler failed", "subject", b.subject, "stream", b.js.stream, "error", herr)
-	}
-	if !c.acks {
-		return
-	}
-	if _, ok := d.settle(); !ok {
-		return
-	}
-	r.untrack(d)
-
-	if herr != nil {
-		if err := r.nak(d); err != nil {
-			r.logger.Error("nats: nak failed", "subject", b.subject, "stream", b.js.stream, "error", err)
-		}
-		return
-	}
-	if b.js.ack == ackDouble {
-		actx, cancel := context.WithTimeout(context.Background(), r.client.requestTimeout)
-		defer cancel()
-		err = d.msg.DoubleAck(actx)
-	} else {
-		err = d.msg.Ack()
-	}
-	if err != nil {
-		r.logger.Error("nats: ack failed", "subject", b.subject, "stream", b.js.stream, "error", err)
-	}
-}
-
-func (r *Runtime) nak(d *delivery) error {
-	if delay := d.consumer.sub.js.nakDelay; delay > 0 {
-		return d.msg.NakWithDelay(delay)
-	}
-	return d.msg.Nak()
-}
-
-func (r *Runtime) untrack(d *delivery) {
-	r.pendingMu.Lock()
-	delete(r.pending, d)
-	r.pendingMu.Unlock()
-}
-
-// abandonPending abandons every delivery not yet settled.
-func (r *Runtime) abandonPending() {
-	r.pendingMu.Lock()
-	ds := make([]*delivery, 0, len(r.pending))
-	for d := range r.pending {
-		ds = append(ds, d)
-	}
-	r.pendingMu.Unlock()
-	for _, d := range ds {
-		r.abandon(d)
-	}
-}
-
-// abandon naks a delivery Stop gives up on and logs it, unless it is already
-// settled.
-func (r *Runtime) abandon(d *delivery) {
-	running, ok := d.settle()
-	if !ok {
-		return
-	}
-	r.untrack(d)
-	b := d.consumer.sub
-	attrs := []any{
-		"subject", b.subject,
-		"stream", b.js.stream,
-	}
-	if meta, err := d.msg.Metadata(); err == nil {
-		attrs = append(attrs, "consumer", meta.Consumer, "stream_sequence", meta.Sequence.Stream)
-	}
-	if id := incomingMetadata(d.msg.Headers())[mesh.MessageIDKey]; id != "" {
-		attrs = append(attrs, "message_id", id)
-	}
-	attrs = append(attrs, "handler_running", running)
-	if err := r.nak(d); err != nil {
-		attrs = append(attrs, "error", err)
-	}
-	r.logger.Warn("nats: nacked a message at the end of the drain", attrs...)
-}
-
-func callEndpoint(ctx context.Context, h mesh.EndpointHandler, in mesh.Message) (out mesh.Message, err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			out, err = mesh.Message{}, fmt.Errorf("panic: %v", p)
-		}
-	}()
-	return h(ctx, in)
-}
-
-func callSubscriber(ctx context.Context, h mesh.SubscriberHandler, in mesh.Message) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			err = fmt.Errorf("panic: %v", p)
-		}
-	}()
-	return h(ctx, in)
 }
 
 // flush round-trips to the server. nats.go requires a deadline, so fallback

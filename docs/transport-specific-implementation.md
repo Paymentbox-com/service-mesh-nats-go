@@ -164,6 +164,23 @@ that follows skips the flush and returns the drain result.
 
 A runtime does not restart. `Start` after `Stop` returns `ErrStopped`.
 
+## Logging
+
+The runtime logs through the `*slog.Logger` given to `New` with
+`nats.WithLogger`, or `slog.Default()`. A `Client` logs nothing.
+
+| Level | Message | Logged when | Attributes |
+|---|---|---|---|
+| Error | `nats: endpoint handler failed` | An endpoint handler returns an error or panics. | `subject`, `error` |
+| Error | `nats: reply failed` | Publishing an endpoint's reply fails. | `subject`, `error` |
+| Error | `nats: subscriber handler failed` | A subscriber handler returns an error or panics. | `subject`, `error`, and `stream` for JetStream |
+| Error | `nats: ack failed` | Acking a JetStream message after its handler succeeded fails. | `subject`, `stream`, `error` |
+| Error | `nats: nak failed` | Nacking a JetStream message after its handler failed fails. | `subject`, `stream`, `error` |
+| Warn | `nats: consume error` | nats.go reports an error while consuming a JetStream consumer, such as missed heartbeats or a deleted consumer. | `subject`, `stream`, `error` |
+| Warn | `nats: message has no JetStream metadata` | A JetStream delivery's metadata cannot be read, so the handler gets the message without the delivery metadata keys. | `subject`, `error` |
+| Warn | `nats: nacked a message at the end of the drain` | `Stop`'s drain ends while a JetStream message is not settled, as described in [JetStream](jetstream.md#stopping). | `subject`, `stream`, `consumer`, `stream_sequence`, `message_id` when present, `handler_running`, and `error` when the nak fails |
+| Warn | `nats: flush during stop failed` | The flush in `Stop` fails after every handler finished. | `error` |
+
 ## Errors
 
 nats.go errors are returned unchanged, including connection failures. The

@@ -273,19 +273,19 @@ The client and the runtime give access to JetStream state outside a handler.
 | `(*Client).Conn()` | The client's `*nats.Conn`. |
 | `(*Client).JetStream()` | The `jetstream.JetStream` the client publishes with. |
 | `(*Client).Stream(ctx, target)` | The stream named by the target's `stream`, or nil and no error when the target has none. |
-| `(*Runtime).Subscriber(target)` | The runtime's `*nats.Subscriber` for the target while the runtime is running, or false when it is not running or has no subscriber for the target. |
-| `(*Subscriber).Target()` | The subscriber's target. |
-| `(*Subscriber).ConsumerGroup()` | The resolved consumer group. |
-| `(*Subscriber).Stream(ctx)` | The stream named by the subscriber's settings, or nil and no error when they have no `stream`. |
-| `(*Subscriber).Consumer()` | The `jetstream.Consumer` the subscriber pulls from, or nil when its settings have no `stream`. |
+| `(*Runtime).Receiver(target)` | The runtime's `*nats.Receiver` for the target's endpoint or subscriber while the runtime is running, or false when it is not running or has neither for the target. |
+| `(*Receiver).Target()` | The receiver's target. |
+| `(*Receiver).ConsumerGroup()` | The resolved consumer group. |
+| `(*Receiver).Stream(ctx)` | The stream named by the receiver's settings, or nil and no error when they have no `stream`, which is so for every endpoint. |
+| `(*Receiver).Consumer()` | The `jetstream.Consumer` the receiver pulls from, or nil when its settings have no `stream`. |
 
 `Client.Stream` reads the target, so it names the stream a publish to the
-target uses. A subscriber's `Stream` reads the subscriber's settings, so it
+target uses. A receiver's `Stream` reads the receiver's settings, so it
 names the stream the subscriber consumes. `Client.Stream` and
-`Subscriber.Stream` return `ErrClosed` after the client is closed, and a
+`Receiver.Stream` return `ErrClosed` after the client is closed, and a
 lookup failure as the nats.go error unchanged.
 
-For an ordered or `none` consumer, `Subscriber.Consumer` is the only way to
+For an ordered or `none` consumer, `Receiver.Consumer` is the only way to
 reach the consumer, because nats.go names it at each `Start`. For an ordered
 consumer, `Info` describes the consumer nats.go is using at the time of the
 call.
@@ -294,9 +294,9 @@ A process that loads everything in a stream before it serves can wait on
 the subscriber's consumer after `Start`:
 
 ```go
-sub, _ := rt.Subscriber(target)
+rc, _ := rt.Receiver(target)
 for {
-    info, err := sub.Consumer().Info(ctx)
+    info, err := rc.Consumer().Info(ctx)
     if err != nil { /* ... */ }
     if info.NumPending == 0 && info.NumAckPending == 0 {
         break

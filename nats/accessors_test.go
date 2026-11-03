@@ -42,16 +42,29 @@ func TestClient_StreamAfterClose(t *testing.T) {
 	}
 }
 
-func TestRuntime_SubscriberForTargetWithoutSubscriber(t *testing.T) {
+func TestRuntime_ReceiverForEndpoint(t *testing.T) {
 	url := startServer(t)
 	r := startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
 
-	if _, ok := r.Subscriber(echoTarget); ok {
-		t.Fatal("want no subscriber for an endpoint's target")
+	rc, ok := r.Receiver(echoTarget)
+	if !ok {
+		t.Fatal("no receiver for the endpoint's target")
+	}
+	if !rc.Target().Equal(echoTarget) {
+		t.Fatalf("receiver target %v, want %v", rc.Target(), echoTarget)
 	}
 }
 
-func TestSubscriber_StreamFromOwnMetadata(t *testing.T) {
+func TestRuntime_ReceiverForTargetWithoutReceiver(t *testing.T) {
+	url := startServer(t)
+	r := startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+
+	if _, ok := r.Receiver(eventTarget); ok {
+		t.Fatal("want no receiver for a target the runtime does not serve")
+	}
+}
+
+func TestReceiver_StreamFromOwnMetadata(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
 	target := mesh.Target{Segments: eventTarget.Segments, Kind: mesh.KindTopic, Metadata: map[string]string{StreamKey: "OTHER"}}
@@ -61,11 +74,11 @@ func TestSubscriber_StreamFromOwnMetadata(t *testing.T) {
 		Handler:  okSubscriber,
 	}})
 
-	sub, ok := r.Subscriber(target)
+	rc, ok := r.Receiver(target)
 	if !ok {
-		t.Fatal("no subscriber for the target")
+		t.Fatal("no receiver for the target")
 	}
-	s, err := sub.Stream(context.Background())
+	s, err := rc.Stream(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,21 +87,21 @@ func TestSubscriber_StreamFromOwnMetadata(t *testing.T) {
 	}
 }
 
-func TestSubscriber_StreamWithoutStream(t *testing.T) {
+func TestReceiver_StreamWithoutStream(t *testing.T) {
 	url := startServer(t)
 	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Handler: okSubscriber}})
 
-	sub, ok := r.Subscriber(eventTarget)
+	rc, ok := r.Receiver(eventTarget)
 	if !ok {
-		t.Fatal("no subscriber for the target")
+		t.Fatal("no receiver for the target")
 	}
-	s, err := sub.Stream(context.Background())
+	s, err := rc.Stream(context.Background())
 	if s != nil || err != nil {
 		t.Fatalf("want nil and no error, got %v, %v", s, err)
 	}
 }
 
-func TestSubscriber_Consumer(t *testing.T) {
+func TestReceiver_Consumer(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
 	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{
@@ -98,11 +111,11 @@ func TestSubscriber_Consumer(t *testing.T) {
 		Handler:       okSubscriber,
 	}})
 
-	sub, ok := r.Subscriber(eventTarget)
+	rc, ok := r.Receiver(eventTarget)
 	if !ok {
-		t.Fatal("no subscriber for the target")
+		t.Fatal("no receiver for the target")
 	}
-	if name := sub.Consumer().CachedInfo().Name; name != "audit" {
+	if name := rc.Consumer().CachedInfo().Name; name != "audit" {
 		t.Fatalf("consumer %q, want audit", name)
 	}
 }
