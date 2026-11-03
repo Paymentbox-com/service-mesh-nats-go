@@ -70,19 +70,23 @@ other two override them for one call or one subscriber. `stream` and
 `request_timeout` are read by `Publish`. The others are read from the
 settings of a subscriber that has `stream`, and ignored everywhere else.
 
-| Key | Read by | Default | Meaning |
-|---|---|---|---|
-| `stream` | `Publish`, subscriber | none | The stream name. On `Publish` it sends a JetStream publish and waits for the ack. On a subscriber it consumes from a consumer on the stream instead of a queue subscription. |
-| `request_timeout` | `Publish` | the client's `request_timeout` | Bounds the wait for the ack. |
-| `create_consumer` | subscriber | `true` | `false` leaves a named group's consumer to be created and updated outside the runtime. |
-| `ack_policy` | subscriber | `double` | `double`, `explicit`, or `none`, described under [Ack Policies](#ack-policies). |
-| `ack_wait` | subscriber | `30s` | Time allowed before an unacked message is sent again. |
-| `max_deliver` | subscriber | the runtime configuration's `max_deliver`, which defaults to `5` | The most times one message is delivered. |
-| `backoff` | subscriber | none | Comma-separated delays, one for each delivery in turn, that replace `ack_wait`. `max_deliver` must exceed the number of delays. |
-| `nak_delay` | subscriber | none | Delay before a failed message is sent again. Unset sends it again right away. |
-| `max_ack_pending` | subscriber | `1000` | The most unacked messages the consumer allows at once. |
-| `deliver_policy` | subscriber | `all` | `all` or `new`, where a newly created consumer starts in the stream. |
-| `consumer_inactive_threshold` | subscriber | `168h` for a named group, `5m` for an ordered consumer, and the server's `5s` for other `none` consumers | How long the consumer outlives its last puller. |
+| Key | Read by | Default | Meaning | Sent over the connection |
+|---|---|---|---|---|
+| `stream` | `Publish`, subscriber | none | The stream name. On `Publish` it sends a JetStream publish and waits for the ack. On a subscriber it consumes from a consumer on the stream instead of a queue subscription. | Yes, to the server. On `Publish` it goes in the `Nats-Expected-Stream` header. On a subscriber it names the stream in the runtime's consumer requests. |
+| `request_timeout` | `Publish` | the client's `request_timeout` | Bounds the wait for the ack. | No. It bounds how long the client waits for the server's ack. A JetStream publish carries no `Mesh-Timeout`. |
+| `create_consumer` | subscriber | `true` | `false` leaves a named group's consumer to be created and updated outside the runtime. | No. It decides whether the runtime sends consumer settings at all. |
+| `ack_policy` | subscriber | `double` | `double`, `explicit`, or `none`, described under [Ack Policies](#ack-policies). | Yes, to the server, in the consumer's settings: explicit for `double` and `explicit`, none for `none`. |
+| `ack_wait` | subscriber | `30s` | Time allowed before an unacked message is sent again. | Yes, to the server, in the consumer's settings. |
+| `max_deliver` | subscriber | the runtime configuration's `max_deliver`, which defaults to `5` | The most times one message is delivered. | Yes, to the server, in the consumer's settings. |
+| `backoff` | subscriber | none | Comma-separated delays, one for each delivery in turn, that replace `ack_wait`. `max_deliver` must exceed the number of delays. | Yes, to the server, in the consumer's settings. |
+| `nak_delay` | subscriber | none | Delay before a failed message is sent again. Unset sends it again right away. | Yes, to the server, with each nak. |
+| `max_ack_pending` | subscriber | `1000` | The most unacked messages the consumer allows at once. | Yes, to the server, in the consumer's settings. |
+| `deliver_policy` | subscriber | `all` | `all` or `new`, where a newly created consumer starts in the stream. | Yes, to the server, in the consumer's settings. |
+| `consumer_inactive_threshold` | subscriber | `168h` for a named group, `5m` for an ordered consumer, and the server's `5s` for other `none` consumers | How long the consumer outlives its last puller. | Yes, to the server, in the consumer's settings. |
+
+The consumer's settings are sent only when the runtime creates or updates
+the consumer, so with `create_consumer = "false"` none of them are sent. No
+option is sent as a message header under its own key.
 
 A value that does not parse, or is not one of its allowed values, makes `New`
 return `ErrBadConfig`. So does `create_consumer = "false"` on a subscriber

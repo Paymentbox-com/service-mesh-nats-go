@@ -19,15 +19,15 @@ All values are strings. `NewClient` reads the connection keys, and `New` reads
 `deployment_group`, which is required, `concurrency`, and `max_deliver`. Each
 constructor ignores the other's keys, so one `Config` can be given to both.
 
-| Key | Read by | Default | Meaning |
-|---|---|---|---|
-| `url` | `NewClient` | `nats://127.0.0.1:4222` | The server URL, or a comma-separated list of them. An empty value takes the default. |
-| `name` | `NewClient` | none | The connection name reported to the server. |
-| `connect_timeout` | `NewClient` | `5s` | The bound on the initial connection, as a Go duration. |
-| `request_timeout` | `NewClient` | `30s` | The bound on `Request` and on the wait for a JetStream publish ack, as a Go duration. A context deadline that comes sooner bounds the call instead. A target's metadata or a call's options can override it, as described under [Settings](#settings). |
-| `deployment_group` | `New` | required | The queue group that endpoints and subscribers join. |
-| `concurrency` | `New` | CPU count | The most handlers that run at once. |
-| `max_deliver` | `New` | `5` | The most times one JetStream message is delivered, for subscribers that do not set their own. |
+| Key | Read by | Default | Meaning | Sent over the connection |
+|---|---|---|---|---|
+| `url` | `NewClient` | `nats://127.0.0.1:4222` | The server URL, or a comma-separated list of them. An empty value takes the default. | No. It picks the server to connect to. |
+| `name` | `NewClient` | none | The connection name reported to the server. | Yes, to the server when the client connects. |
+| `connect_timeout` | `NewClient` | `5s` | The bound on the initial connection, as a Go duration. | No. |
+| `request_timeout` | `NewClient` | `30s` | The bound on `Request` and on the wait for a JetStream publish ack, as a Go duration. A context deadline that comes sooner bounds the call instead. A target's metadata or a call's options can override it, as described under [Settings](#settings). | Yes, on each request. The time left before the bound goes to the endpoint as the `Mesh-Timeout` header, in whole milliseconds. |
+| `deployment_group` | `New` | required | The queue group that endpoints and subscribers join. | Yes, to the server, as the queue group of every endpoint and subscriber whose `ConsumerGroup` is empty, and as the consumer name of such a JetStream subscriber. |
+| `concurrency` | `New` | CPU count | The most handlers that run at once. | No. |
+| `max_deliver` | `New` | `5` | The most times one JetStream message is delivered, for subscribers that do not set their own. | Yes, to the server, in the settings of each consumer the runtime creates or updates. |
 
 A value that does not parse returns `ErrBadConfig`. A logger is passed to `New`
 with `nats.WithLogger`, and defaults to `slog.Default()`.
@@ -46,6 +46,11 @@ first of these that has them:
 `stream` and the other JetStream options listed in
 [JetStream](jetstream.md#options). Endpoint and subscriber settings are read
 when `New` runs.
+
+Settings are not message metadata, and the transport never sends a setting
+as a header under its own key. Some settings change what the transport
+sends, and the tables in this page and in [JetStream](jetstream.md#options)
+say which, and in what form.
 
 `stream` in an endpoint's settings makes `New` return `ErrBadConfig`, and in
 a request's settings makes `Request` return `ErrBadConfig`.
