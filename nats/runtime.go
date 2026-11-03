@@ -149,7 +149,7 @@ func (r *Runtime) Running() bool {
 // each JetStream subscriber's stream and creates or looks up its consumer,
 // returning the nats.go error unchanged when one fails.
 //
-// A failure removes the subscriptions and consumes made so far and leaves
+// A failure unsubscribes and stops the consumers opened so far, and leaves
 // the runtime and the client as they were.
 func (r *Runtime) Start(ctx context.Context) error {
 	r.mu.Lock()

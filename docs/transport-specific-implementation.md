@@ -49,8 +49,9 @@ when `New` runs.
 
 Settings are not message metadata, and the transport never sends a setting
 as a header under its own key. Some settings change what the transport
-sends, and the tables in this page and in [JetStream](jetstream.md#options)
-say which, and in what form.
+sends. The "Sent over the connection" column in the Configuration table above
+and in [JetStream's options](jetstream.md#options) says which, and in what
+form.
 
 `stream` in an endpoint's settings makes `New` return `ErrBadConfig`, and in
 a request's settings makes `Request` return `ErrBadConfig`.
@@ -68,7 +69,7 @@ The transport uses these keys the specification reserves:
 | `Mesh-Deadline` | A request that carries `Mesh-Timeout`, when it reaches the endpoint handler | Its arrival time plus `Mesh-Timeout`, in RFC 3339 with fractional seconds. The handler's context carries the same deadline. |
 | `Mesh-Deadline` | A JetStream delivery from a consumer that acks | When the server sends the message again unless it is acked, as described in [JetStream](jetstream.md#the-handlers-time-limit). |
 | `Mesh-Delivery-Attempt` | A JetStream delivery | Which delivery of the message this is, starting at 1. |
-| `Mesh-Message-Id` | Set by the caller or publisher | An ID that stays the same when the same message is sent again. |
+| `Mesh-Message-Id` | A request or publish, by the caller or publisher | An ID that stays the same when the same message is sent again. |
 
 `Mesh-Message-Id` and the NATS header `Nats-Msg-Id` are one field. On a request
 or publish, `Mesh-Message-Id` wins, and the transport sets `Nats-Msg-Id` to its
@@ -90,7 +91,7 @@ for an endpoint every instance replies.
 Two endpoints or subscribers on one subject are two NATS subscriptions, with
 whatever delivery NATS gives them.
 
-A subscriber with the `stream` option consumes from a JetStream consumer
+A subscriber with the `stream` setting consumes from a JetStream consumer
 instead, as described in [JetStream](jetstream.md).
 
 ## Handler Failure
@@ -138,13 +139,13 @@ client's.
 
 `Start` subscribes every endpoint and subscriber on the client's connection and
 flushes, with a budget of five seconds, so the server knows every subscription
-before `Start` returns. With at least one JetStream subscriber, it first runs
-the [boot check](jetstream.md#the-boot-check), and then creates or looks up
-each JetStream subscriber's consumer.
+before `Start` returns. It first runs the
+[boot check](jetstream.md#the-boot-check), and then creates or looks up each
+JetStream subscriber's consumer.
 
-`Start` on a closed client returns `ErrClosed`. A failure ends the
-subscriptions and the consuming started so far, and leaves the runtime and the
-client as they were.
+`Start` on a closed client returns `ErrClosed`. A failure unsubscribes what
+was subscribed, stops the consumers started so far, and leaves the runtime
+and the client as they were.
 
 ### Stopping
 
@@ -197,5 +198,5 @@ These are the errors this package defines.
 | `ErrClosed` | `Request` or `Publish` is called on a client after `Close`, which for a runtime's client is after `Stop`, or `Start` is called on a runtime whose client is closed. |
 | `ErrAlreadyStarted` | `Start` is called on a running runtime. |
 | `ErrStopped` | `Start` is called on a runtime after `Stop`. |
-| `ErrStreamCoversRoute` | `Start` finds a stream covering an endpoint subject on a runtime with a JetStream subscriber. It is wrapped with the subject and the stream name. |
+| `ErrStreamCoversRoute` | `Start` finds a stream covering one of the runtime's endpoint subjects. It is wrapped with the subject and the stream name. |
 | `*HandlerError` | The serving endpoint handler returned an error or panicked. `Text` is its message. |

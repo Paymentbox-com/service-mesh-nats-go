@@ -10,7 +10,7 @@ module, so they build with the current checkout and need no setup.
 
 | Program | Does |
 |---|---|
-| `serve` | Runs one endpoint or subscriber and prints each message its handler receives, with its metadata and context deadline. For a JetStream subscriber it also prints the consumer's settings as the server holds them. Ctrl-C stops it through `Stop`. |
+| `serve` | Runs one endpoint or subscriber and prints each message its handler receives, with its metadata and context deadline. It also prints a JetStream subscriber's consumer settings as the server holds them, and stops through `Stop` on Ctrl-C. |
 | `send` | Sends requests or publishes and prints each result, naming the error when there is one. |
 | `streams` | Creates, inspects, and deletes streams and consumers. |
 
@@ -24,7 +24,7 @@ module, so they build with the current checkout and need no setup.
 | `-set` | The `Endpoint`'s or `Subscriber`'s metadata in `serve`, and the per-call options in `send` | Both |
 | `-md` | The message metadata | `send` |
 
-The other flags:
+These are the other flags.
 
 | Program | Flag | Default | Meaning |
 |---|---|---|---|
@@ -328,8 +328,8 @@ JetStream consumer "v69cCq8dEN2sSbaIs3MDTF_1" on stream "DEMO_CREATED": ack_poli
 ```
 
 With `deliver_policy=all` it replays the whole stream, and its handlers get no
-context deadline and no `Mesh-Deadline`. Both consumers are new at every
-start.
+context deadline and no `Mesh-Deadline`. Each start creates a new consumer
+for both commands.
 
 ### A Consumer Managed Outside the Runtime
 
@@ -339,8 +339,9 @@ go run ./docs/runbooks/cmd/serve -group billing -set stream=DEMO_CREATED -set cr
 go run ./docs/runbooks/cmd/serve -group nobody -set stream=DEMO_CREATED -set create_consumer=false
 ```
 
-The first `serve` prints `ack_wait=1m0s`, which is the consumer's own setting.
-It ignores `-set ack_wait=5s`. The second exits with
+The first `serve` prints `ack_wait=1m0s`, which is the consumer's own setting,
+because the runtime ignores `-set ack_wait=5s` for a consumer it doesn't
+create. The second exits with
 `Start: nats: API error: code=404 err_code=10014 description=consumer not found`.
 
 ### Target Settings and Subscriber Overrides

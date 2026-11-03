@@ -129,8 +129,8 @@ consumer:
 - All instances in a named group pull from one consumer named by the group,
   so each message goes to one instance of the group, and each group gets
   every message.
-- With `none`, each instance pulls from its own consumer, which nats.go names
-  anew at each `Start`.
+- With `none`, each instance pulls from its own consumer, which nats.go gives
+  a new name at each `Start`.
 
 A restarted `none` instance creates a new consumer, which starts where
 `deliver_policy` says, and does not resume its old one. An application that
@@ -151,9 +151,10 @@ ordering guarantee.
 
 - `double` acks each message and waits for the server to confirm the ack.
 - `explicit` acks each message without waiting.
-- `none` acks nothing, and nothing is sent again. Delivery is at most once,
-  and `ack_wait`, `backoff`, `max_deliver`, `nak_delay`, `max_ack_pending`,
-  and `Mesh-Deadline` do not apply.
+- `none` acks nothing, and nothing is sent again, so delivery is at most once.
+
+With `none`, `ack_wait`, `backoff`, `max_deliver`, `nak_delay`,
+`max_ack_pending`, and `Mesh-Deadline` do not apply.
 
 `double` and `explicit` create the consumer with NATS's explicit ack policy.
 With `create_consumer = "false"`, the server's ack policy decides whether
@@ -173,7 +174,7 @@ after `nak_delay` when it is set. `max_deliver` bounds how many times one
 message is delivered, and `backoff` spaces out redelivery after a missed ack
 deadline.
 
-Handlers are expected to be idempotent. A message can be handled more than
+Handlers need to be idempotent, because a message can be handled more than
 once after a missed deadline, a failed ack, or a nak at the end of a drain.
 `ack_policy = "double"` confirms that each ack was recorded.
 
@@ -182,13 +183,16 @@ once after a missed deadline, a failed ack, or a nak at the end of a drain.
 A handler that runs past its ack deadline gets its message delivered again
 while it is still running. The transport tells the handler its deadline:
 
-- The deadline is the delivery time plus the consumer's `ack_wait`, or the
-  `backoff` entry for this delivery when the consumer has one. The runtime
-  reads these from the server's settings for the consumer at `Start`.
-- The handler's context carries the deadline. Cancellation is cooperative,
-  so a handler that ignores its context keeps running.
+- The handler's context carries the deadline.
 - The message metadata carries it as `Mesh-Deadline`, in RFC 3339 with
   fractional seconds.
+
+The deadline is the delivery time plus the consumer's `ack_wait`, or the
+`backoff` entry for this delivery when the consumer has one. The runtime
+reads these from the server's settings for the consumer at `Start`.
+
+Cancellation is cooperative, so a handler that ignores its context keeps
+running.
 
 A consumer that does not ack has no deadline.
 
@@ -223,8 +227,8 @@ The runtime creates every consumer itself at `Start`, because only the
 running process knows each subscriber's resolved consumer group.
 
 - A named group's consumer is created, or updated when it exists, with the
-  subscriber's settings and the group's name. Its filter subject is the
-  target's subject.
+  subscriber's settings and the group's name.
+- A named group's consumer filters on the target's subject.
 - A `none` subscriber's consumer is created with no name, and nats.go names
   it.
 - The runtime reads each consumer's settings back from the server, so
@@ -234,13 +238,13 @@ Because every `Start` writes the settings, these effects follow:
 
 - During a rolling deploy, old and new instances rewrite each other's
   consumer settings until the deploy finishes.
-- All instances of a group should resolve the same consumer settings.
-  Instances whose settings differ keep rewriting the consumer while they all
-  run.
-- A setting the server does not allow to change after creation, such as
-  `deliver_policy`, makes `Start` fail with the server's error when it
-  changes. The consumer is then deleted by hand, which loses its position in
-  the stream.
+- Instances of a group whose settings differ keep rewriting the consumer
+  while they all run, so every instance of a group needs the same consumer
+  settings.
+- A change to a setting the server does not allow to change after creation,
+  such as `deliver_policy`, makes `Start` fail with the server's error.
+  Applying the change means deleting the consumer by hand, which loses its
+  position in the stream.
 - Under `interest` retention, messages published before any consumer exists
   are dropped.
 
@@ -251,10 +255,11 @@ under `interest` retention it keeps every message it has not acked.
 
 A named group's consumer expires once `consumer_inactive_threshold` passes
 with no pulls, which defaults to 7 days. A running runtime pulls
-continuously, so only a consumer whose group has stopped running entirely
-reaches it. A group that stays down longer than the threshold loses its
-consumer. Its next `Start` creates a new one under `deliver_policy`, and under
-`interest` retention the messages only it still needed are gone.
+continuously, so a consumer reaches the threshold only when every instance of
+its group has stopped. A group that stays down longer than the threshold
+loses its consumer, and its next `Start` creates a new one under
+`deliver_policy`. Under `interest` retention, the messages that no other
+consumer still needed are gone by then.
 
 ### Consumers Managed Outside the Runtime
 

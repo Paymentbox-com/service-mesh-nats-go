@@ -26,9 +26,9 @@ var (
 	// restartable.
 	ErrStopped = errors.New("nats: runtime has been stopped")
 
-	// ErrStreamCoversRoute is returned by Start on a runtime with a
-	// JetStream subscriber when a stream covers one of its endpoint
-	// subjects. It is wrapped with the subject and the stream name.
+	// ErrStreamCoversRoute is returned by Start when a stream covers one of
+	// the runtime's endpoint subjects. It is wrapped with the subject and the
+	// stream name.
 	ErrStreamCoversRoute = errors.New("nats: a stream covers an endpoint subject")
 )
 
