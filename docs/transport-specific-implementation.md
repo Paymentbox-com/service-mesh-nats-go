@@ -164,6 +164,12 @@ When the drain ends first, `Stop` naks the JetStream messages still unsettled
 and logs a warning for each, as described in [JetStream](jetstream.md#stopping).
 Core messages still buffered at that point are dropped.
 
+Cancellation is cooperative. A handler still running when the drain ends
+keeps running after `Stop` returns, until it returns or the process exits.
+Its result is discarded, so a late reply is not sent and a late JetStream
+result does not settle a message `Stop` already nacked. Anything it sends
+through the client fails with `ErrClosed`.
+
 `Stop` on a runtime that is not running returns nil and leaves the client as it
 is. Closing the client directly ends the runtime's connection, and a `Stop`
 that follows skips the flush and returns the drain result.

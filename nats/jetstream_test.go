@@ -607,6 +607,70 @@ func TestStart_OrderedConsumerInactiveThreshold(t *testing.T) {
 	}
 }
 
+func TestStart_NoneConsumerWithAcksInactiveThreshold(t *testing.T) {
+	// A none consumer that acks is named anew at every Start, so the
+	// server's 5 second default removes it soon after its instance stops.
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{
+		Target:        eventTarget,
+		ConsumerGroup: mesh.ConsumerGroupNone,
+		Metadata:      map[string]string{StreamKey: "EVENTS"},
+		Handler:       okSubscriber,
+	}})
+
+	rc, ok := r.Receiver(eventTarget)
+	if !ok {
+		t.Fatal("no receiver for the target")
+	}
+	info, err := rc.Consumer().Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Config.InactiveThreshold; got != 5*time.Second {
+		t.Fatalf("none consumer inactive threshold %s, want the server's 5s", got)
+	}
+}
+
+func TestConsume_OrderedConsumerDeliverPolicyNew(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	c := testClient(t, testConfig(url))
+	publish := func(payload string) {
+		t.Helper()
+		if err := c.Publish(context.Background(), mesh.Message{Target: eventTarget, Payload: []byte(payload)}, map[string]string{StreamKey: "EVENTS"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish("before")
+
+	got := make(chan string, 2)
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{
+		Target:        eventTarget,
+		ConsumerGroup: mesh.ConsumerGroupNone,
+		Metadata:      map[string]string{StreamKey: "EVENTS", AckPolicyKey: "none", DeliverPolicyKey: "new"},
+		Handler: func(ctx context.Context, m mesh.Message) error {
+			got <- string(m.Payload)
+			return nil
+		},
+	}})
+	publish("after")
+
+	select {
+	case p := <-got:
+		if p != "after" {
+			t.Fatalf("ordered consumer with deliver_policy new delivered %q first, want only \"after\"", p)
+		}
+	case <-time.After(testWait):
+		t.Fatal("subscriber did not receive the message published after Start")
+	}
+	select {
+	case p := <-got:
+		t.Fatalf("ordered consumer delivered a second message %q, want only \"after\"", p)
+	case <-time.After(100 * time.Millisecond): // give an unwanted extra delivery time to show up
+	}
+}
+
 func TestConsume_DeadlineUsesBackoffEntry(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
@@ -748,5 +812,48 @@ func TestStop_NaksMessagesBufferedWhenTheDrainEnds(t *testing.T) {
 	}
 	if len(warnings) != 5 || len(ids) != 5 {
 		t.Fatalf("logged %d warnings for %d messages, want one for each of 5", len(warnings), len(ids))
+	}
+}
+
+func TestStart_FailureUnsubscribesEarlierEndpoints(t *testing.T) {
+	url := startServer(t)
+	r := newRuntime(t, testConfig(url),
+		[]mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}},
+		[]mesh.Subscriber{{Target: eventTarget, Metadata: map[string]string{StreamKey: "MISSING"}, Handler: okSubscriber}},
+	)
+	if err := r.Start(context.Background()); !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Fatalf("Start: want jetstream.ErrStreamNotFound, got %v", err)
+	}
+
+	c := testClient(t, testConfig(url))
+	if _, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil); !errors.Is(err, ErrNoResponders) {
+		t.Fatalf("request after a failed Start: want nats.ErrNoResponders, got %v", err)
+	}
+}
+
+func TestStart_FailureStopsEarlierConsumers(t *testing.T) {
+	url := startServer(t)
+	stream := createStream(t, url, "EVENTS", "test.event")
+	other := mesh.Target{Segments: []string{"test", "other"}, Kind: mesh.KindTopic}
+	r := newRuntime(t, testConfig(url), nil, []mesh.Subscriber{
+		{Target: eventTarget, ConsumerGroup: "audit", Metadata: map[string]string{StreamKey: "EVENTS"}, Handler: okSubscriber},
+		{Target: other, Metadata: map[string]string{StreamKey: "MISSING"}, Handler: okSubscriber},
+	})
+	if err := r.Start(context.Background()); !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Fatalf("Start: want jetstream.ErrStreamNotFound, got %v", err)
+	}
+
+	publishEvents(t, url, 1)
+	time.Sleep(300 * time.Millisecond) // give a pull that should not happen time to take the message
+	cons, err := stream.Consumer(context.Background(), "audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := cons.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Delivered.Consumer != 0 {
+		t.Fatalf("consumer delivered %d messages after a failed Start, want 0", info.Delivered.Consumer)
 	}
 }

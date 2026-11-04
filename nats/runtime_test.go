@@ -78,8 +78,8 @@ func TestRequest_NoResponders(t *testing.T) {
 	c := testClient(t, testConfig(url))
 
 	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
-	if !errors.Is(err, natsio.ErrNoResponders) {
-		t.Fatalf("want natsio.ErrNoResponders, got %v", err)
+	if !errors.Is(err, ErrNoResponders) {
+		t.Fatalf("want nats.ErrNoResponders, got %v", err)
 	}
 }
 
@@ -101,6 +101,9 @@ func TestRequest_HandlerError(t *testing.T) {
 	var he *HandlerError
 	if !errors.As(err, &he) || he.Text != "boom" {
 		t.Fatalf("returned error: want HandlerError{boom}, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error message %q does not include the handler's text", err.Error())
 	}
 
 	_, err = c.Request(context.Background(), mesh.Message{Target: panicking}, nil)
@@ -126,8 +129,8 @@ func TestRequest_Timeouts(t *testing.T) {
 	c := testClient(t, cfg)
 
 	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
-	if !errors.Is(err, natsio.ErrTimeout) {
-		t.Fatalf("configured timeout: want natsio.ErrTimeout, got %v", err)
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("configured timeout: want nats.ErrTimeout, got %v", err)
 	}
 
 	start := time.Now()

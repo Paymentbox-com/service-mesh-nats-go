@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -97,5 +98,44 @@ func TestPublish_TargetStream(t *testing.T) {
 	err := c.Publish(context.Background(), mesh.Message{Target: target}, nil)
 	if !errors.Is(err, jetstream.ErrNoStreamResponse) {
 		t.Fatalf("want jetstream.ErrNoStreamResponse, got %v", err)
+	}
+}
+
+func TestSubscriber_StreamFromTarget(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	target := mesh.Target{Segments: eventTarget.Segments, Kind: mesh.KindTopic, Metadata: map[string]string{StreamKey: "EVENTS"}}
+	got := make(chan mesh.Message, 1)
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: target, Handler: func(ctx context.Context, m mesh.Message) error {
+		got <- m
+		return nil
+	}}})
+
+	publishEvents(t, url, 1)
+	select {
+	case m := <-got:
+		if m.Metadata[StreamMetadataKey] != "EVENTS" {
+			t.Fatalf("delivered from stream %q, want EVENTS", m.Metadata[StreamMetadataKey])
+		}
+	case <-time.After(testWait):
+		t.Fatal("subscriber did not receive the message")
+	}
+}
+
+func TestSubscriber_FailureLogged(t *testing.T) {
+	url := startServer(t)
+	logs := &logRecords{}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Handler: func(ctx context.Context, m mesh.Message) error {
+		return errors.New("boom")
+	}}}, WithLogger(slog.New(logs)))
+	c := testClient(t, testConfig(url))
+
+	if err := c.Publish(context.Background(), mesh.Message{Target: eventTarget}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(logs.withMessage("nats: subscriber handler failed")) == 1 })
+	rec := logs.withMessage("nats: subscriber handler failed")[0]
+	if rec["subject"].String() != "test.event" || rec["error"].String() != "boom" {
+		t.Fatalf("log record %v, want subject test.event and error boom", rec)
 	}
 }

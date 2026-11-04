@@ -140,3 +140,29 @@ func TestRuntime_ReceiverAfterStop(t *testing.T) {
 		t.Fatal("want no receiver after Stop")
 	}
 }
+
+func TestReceiver_ConsumerGroupNone(t *testing.T) {
+	url := startServer(t)
+	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: mesh.ConsumerGroupNone, Handler: okSubscriber}})
+
+	rc, ok := r.Receiver(eventTarget)
+	if !ok {
+		t.Fatal("no receiver for the target")
+	}
+	if got := rc.ConsumerGroup(); got != mesh.ConsumerGroupNone {
+		t.Fatalf("consumer group %q, want %q", got, mesh.ConsumerGroupNone)
+	}
+}
+
+func TestReceiver_ConsumerGroupDefaultsToDeploymentGroup(t *testing.T) {
+	url := startServer(t)
+	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Handler: okSubscriber}})
+
+	rc, ok := r.Receiver(eventTarget)
+	if !ok {
+		t.Fatal("no receiver for the target")
+	}
+	if got := rc.ConsumerGroup(); got != "test" {
+		t.Fatalf("consumer group %q, want the deployment group %q", got, "test")
+	}
+}
