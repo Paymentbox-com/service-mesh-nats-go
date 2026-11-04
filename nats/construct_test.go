@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func TestParseRuntimeSettings(t *testing.T) {
 			name: "defaults",
 			cfg:  mesh.Config{mesh.DeploymentGroupKey: "d"},
 			want: func(s runtimeSettings) bool {
-				return s.deploymentGroup == "d" && s.concurrency > 0 && s.logger != nil
+				return s.deploymentGroup == "d" && s.concurrency == runtime.NumCPU() && s.logger != nil
 			},
 		},
 		{
@@ -203,6 +204,16 @@ func TestRuntime_ServiceMapIsClients(t *testing.T) {
 	}
 	if got := r.ServiceMap(); len(got.Targets) != 2 || !got.Targets[0].Equal(echoTarget) {
 		t.Fatalf("ServiceMap is not the client's: %+v", got)
+	}
+}
+
+func TestNewClient_ConnectsWithName(t *testing.T) {
+	cfg := testConfig(startServer(t))
+	cfg[NameKey] = "billing-api"
+	c := testClient(t, cfg)
+
+	if got := c.Conn().Opts.Name; got != "billing-api" {
+		t.Fatalf("connection name %q, want billing-api", got)
 	}
 }
 

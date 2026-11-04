@@ -1,6 +1,22 @@
 {
  "mutations": [
   {
+   "id": "ack-explicit-parse",
+   "path": "nats/jetstream.go",
+   "old": "\tcase v == \"explicit\":\n\t\treturn ackExplicit, nil\n",
+   "new": "\tcase v == \"explicit\":\n\t\treturn ackDouble, nil\n",
+   "intent": "ack_policy explicit behaves like double.",
+   "expect": "killed"
+  },
+  {
+   "id": "ack-none-parse",
+   "path": "nats/jetstream.go",
+   "old": "\tcase v == \"none\":\n\t\treturn ackNone, nil\n",
+   "new": "\tcase v == \"none\":\n\t\treturn ackDouble, nil\n",
+   "intent": "ack_policy none acks and redelivers like double.",
+   "expect": "killed"
+  },
+  {
    "id": "acks-server-policy",
    "path": "nats/jetstream.go",
    "old": "c.acks = s.ack != ackNone && cfg.AckPolicy != jetstream.AckNonePolicy",
@@ -14,6 +30,31 @@
    "old": "len(ack.backoff) >= ack.maxDeliver",
    "new": "len(ack.backoff) > ack.maxDeliver",
    "intent": "backoff with as many entries as max_deliver is accepted at New.",
+   "expect": "killed"
+  },
+  {
+   "id": "backoff-trim",
+   "path": "nats/jetstream.go",
+   "old": "time.ParseDuration(strings.TrimSpace(p))",
+   "new": "time.ParseDuration(p)",
+   "intent": "A backoff list with spaces after the commas is rejected.",
+   "expect": "killed"
+  },
+  {
+   "id": "begin-after-abandon",
+   "path": "nats/jetstream.go",
+   "old": "\t\treturn false\n\t}\n\td.state = deliveryRunning\n",
+   "new": "\t}\n\td.state = deliveryRunning\n",
+   "intent": "A delivery Stop already nacked still starts its handler.",
+   "expect": "survives",
+   "reason": "unreviewed"
+  },
+  {
+   "id": "boot-check-subscribers",
+   "path": "nats/jetstream.go",
+   "old": "\t\tif b.endpoint == nil {\n\t\t\tcontinue\n\t\t}\n",
+   "new": "",
+   "intent": "The boot check also fails when a stream covers a subscriber's subject, which every JetStream subscriber has.",
    "expect": "killed"
   },
   {
@@ -49,6 +90,87 @@
    "expect": "killed"
   },
   {
+   "id": "cfg-backoff",
+   "path": "nats/jetstream.go",
+   "old": "\t\tcfg.BackOff = ack.backoff\n",
+   "new": "",
+   "intent": "The consumer is created without the subscriber's backoff.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-concurrency-default",
+   "path": "nats/config.go",
+   "old": "concurrency:     runtime.NumCPU(),",
+   "new": "concurrency:     runtime.NumGoroutine(),",
+   "intent": "The default concurrency is the goroutine count instead of the CPU count.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-connect-timeout-key",
+   "path": "nats/config.go",
+   "old": "durationSetting(cfg, ConnectTimeoutKey, s.connectTimeout)",
+   "new": "durationSetting(cfg, RequestTimeoutKey, s.connectTimeout)",
+   "intent": "connect_timeout is read from request_timeout.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-connect-timeout-unused",
+   "path": "nats/config.go",
+   "old": "opts := []natsio.Option{natsio.Timeout(s.connectTimeout)}",
+   "new": "opts := []natsio.Option{}",
+   "intent": "The initial connection ignores connect_timeout and uses nats.go's default.",
+   "expect": "survives",
+   "reason": "unreviewed"
+  },
+  {
+   "id": "cfg-default-logger",
+   "path": "nats/config.go",
+   "old": "\tif s.logger == nil {\n\t\ts.logger = slog.Default()\n\t}\n",
+   "new": "",
+   "intent": "A runtime built without WithLogger has a nil logger and panics when it logs.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-deployment-required",
+   "path": "nats/config.go",
+   "old": "\tif s.deploymentGroup == \"\" {\n\t\treturn runtimeSettings{}, mesh.ErrNoDeploymentGroup\n\t}\n",
+   "new": "",
+   "intent": "New accepts a Config with no deployment_group instead of returning ErrNoDeploymentGroup.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-durable",
+   "path": "nats/jetstream.go",
+   "old": "\t\tDurable:           s.group,\n",
+   "new": "\t\tDurable:           \"\",\n",
+   "intent": "A named group's consumer is created without the group's name.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-duration-fallback",
+   "path": "nats/config.go",
+   "old": "\tif !ok {\n\t\treturn fallback, nil\n\t}\n\td, err",
+   "new": "\tif !ok {\n\t\treturn 0, nil\n\t}\n\td, err",
+   "intent": "An unset duration setting is zero instead of its default.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-duration-zero",
+   "path": "nats/config.go",
+   "old": "if err != nil || d <= 0 {",
+   "new": "if err != nil || d < 0 {",
+   "intent": "A zero duration such as connect_timeout=0s is accepted.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-int-zero",
+   "path": "nats/config.go",
+   "old": "if err != nil || n <= 0 {",
+   "new": "if err != nil || n < 0 {",
+   "intent": "concurrency=0 or max_deliver=0 is accepted.",
+   "expect": "killed"
+  },
+  {
    "id": "cfg-max-deliver",
    "path": "nats/jetstream.go",
    "old": "\t\tcfg.MaxDeliver = ack.maxDeliver\n",
@@ -57,11 +179,83 @@
    "expect": "killed"
   },
   {
+   "id": "cfg-name-cond",
+   "path": "nats/config.go",
+   "old": "if s.name != \"\" {",
+   "new": "if s.name == \"\" {",
+   "intent": "A configured connection name is never sent to the server.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-name-key",
+   "path": "nats/config.go",
+   "old": "\ts.name = cfg[NameKey]\n",
+   "new": "\ts.name = cfg[URLKey]\n",
+   "intent": "The connection reports the url as its name instead of the configured name.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-url-ignored",
+   "path": "nats/config.go",
+   "old": "if v, ok := cfg[URLKey]; ok && v != \"\" {",
+   "new": "if v, ok := cfg[URLKey]; ok && v == \"\" {",
+   "intent": "NewClient ignores a configured url and connects to the default address.",
+   "expect": "killed"
+  },
+  {
+   "id": "check-kind-cond",
+   "path": "nats/target.go",
+   "old": "if t.Kind != want {",
+   "new": "if t.Kind == want {",
+   "intent": "Every correctly kinded call fails with ErrKindMismatch, and wrong kinds pass.",
+   "expect": "killed"
+  },
+  {
+   "id": "client-request-timeout-cfg",
+   "path": "nats/client.go",
+   "old": "requestTimeout: s.requestTimeout, serviceMap",
+   "new": "requestTimeout: defaultRequestTimeout, serviceMap",
+   "intent": "The client ignores a configured request_timeout and uses 30s.",
+   "expect": "killed"
+  },
+  {
+   "id": "client-stream-empty",
+   "path": "nats/client.go",
+   "old": "\tif name == \"\" {\n\t\treturn nil, nil\n\t}\n",
+   "new": "",
+   "intent": "Client.Stream on a target without a stream returns an error instead of nil.",
+   "expect": "killed"
+  },
+  {
    "id": "client-stream-name",
    "path": "nats/client.go",
    "old": "\tname := target.Metadata[StreamKey]\n",
    "new": "\tname := target.Metadata[RequestTimeoutKey]\n",
    "intent": "Client.Stream reads the wrong key, so it finds no stream for a target that names one.",
+   "expect": "killed"
+  },
+  {
+   "id": "close-cond",
+   "path": "nats/client.go",
+   "old": "if !c.closed {",
+   "new": "if c.closed {",
+   "intent": "Close never closes the connection, so the client keeps working after Close.",
+   "expect": "killed"
+  },
+  {
+   "id": "connections-closed",
+   "path": "nats/client.go",
+   "old": "\tif c.closed {\n\t\treturn nil, nil, ErrClosed\n\t}\n",
+   "new": "",
+   "intent": "Calls after Close return the nats.go error instead of ErrClosed.",
+   "expect": "killed"
+  },
+  {
+   "id": "create-false-creates",
+   "path": "nats/jetstream.go",
+   "old": "\t\tcons, err = stream.Consumer(ctx, s.group)\n",
+   "new": "\t\tcons, err = stream.CreateOrUpdateConsumer(ctx, s.config)\n",
+   "intent": "create_consumer=false creates or overwrites the consumer instead of using the existing one.",
    "expect": "killed"
   },
   {
@@ -89,6 +283,14 @@
    "expect": "killed"
   },
   {
+   "id": "deliver-new-parse",
+   "path": "nats/jetstream.go",
+   "old": "\t\treturn jetstream.DeliverNewPolicy, nil\n",
+   "new": "\t\treturn jetstream.DeliverAllPolicy, nil\n",
+   "intent": "deliver_policy new creates a consumer that starts at the beginning of the stream.",
+   "expect": "killed"
+  },
+  {
    "id": "double-ack-branch",
    "path": "nats/runtime_jetstream.go",
    "old": "if b.js.ack == ackDouble {",
@@ -102,6 +304,30 @@
    "old": "\t\t\tctx, cancel = context.WithDeadline(ctx, deadline)\n",
    "new": "\t\t\t_, cancel = context.WithDeadline(ctx, deadline)\n",
    "intent": "An endpoint handler's context no longer carries the request's deadline.",
+   "expect": "killed"
+  },
+  {
+   "id": "endpoint-panic-ok",
+   "path": "nats/runtime_serve.go",
+   "old": "out, err = mesh.Message{}, fmt.Errorf(\"panic: %v\", p)",
+   "new": "out, err = mesh.Message{}, nil",
+   "intent": "A panicking endpoint handler replies with an empty success.",
+   "expect": "killed"
+  },
+  {
+   "id": "fail-not-nacked",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\tif herr != nil {\n\t\tif err := r.nak(d); err != nil {",
+   "new": "\tif false {\n\t\tif err := r.nak(d); err != nil {",
+   "intent": "A failed handler's message is acked instead of nacked, so it is never redelivered.",
+   "expect": "killed"
+  },
+  {
+   "id": "group-default",
+   "path": "nats/target.go",
+   "old": "\tcase \"\":\n\t\treturn deploymentGroup\n",
+   "new": "\tcase \"\":\n\t\treturn \"\"\n",
+   "intent": "An empty ConsumerGroup gives a plain subscription instead of the deployment group.",
    "expect": "killed"
   },
   {
@@ -137,6 +363,22 @@
    "expect": "killed"
   },
   {
+   "id": "merge-target",
+   "path": "nats/target.go",
+   "old": "\tfor k, v := range target {\n\t\tmd[k] = v\n\t}\n",
+   "new": "",
+   "intent": "Settings in the target's metadata are ignored.",
+   "expect": "killed"
+  },
+  {
+   "id": "meta-delivery-attempt",
+   "path": "nats/jetstream.go",
+   "old": "\tmd[mesh.DeliveryAttemptKey] = strconv.FormatUint(meta.NumDelivered, 10)\n",
+   "new": "\tmd[mesh.TimeoutKey] = strconv.FormatUint(meta.NumDelivered, 10)\n",
+   "intent": "Handlers no longer get Mesh-Delivery-Attempt.",
+   "expect": "killed"
+  },
+  {
    "id": "meta-num-pending",
    "path": "nats/jetstream.go",
    "old": "strconv.FormatUint(meta.NumPending, 10)",
@@ -169,6 +411,32 @@
    "expect": "killed"
   },
   {
+   "id": "none-acks-threshold",
+   "path": "nats/jetstream.go",
+   "old": "\tcase s.group == \"\":\n\t\treturn 0\n",
+   "new": "\tcase s.group == \"\":\n\t\treturn namedInactiveThreshold\n",
+   "intent": "A none consumer that acks lingers for 7 days instead of the server's default.",
+   "expect": "survives",
+   "reason": "unreviewed"
+  },
+  {
+   "id": "open-ack-wait",
+   "path": "nats/jetstream.go",
+   "old": "\tc.ackWait = cfg.AckWait\n",
+   "new": "",
+   "intent": "Deliveries get a deadline of their arrival time instead of arrival plus ack_wait.",
+   "expect": "killed"
+  },
+  {
+   "id": "ordered-deliver-policy",
+   "path": "nats/jetstream.go",
+   "old": "\t\t\tDeliverPolicy:     s.config.DeliverPolicy,\n",
+   "new": "",
+   "intent": "An ordered consumer ignores deliver_policy new and replays the whole stream.",
+   "expect": "survives",
+   "reason": "unreviewed"
+  },
+  {
    "id": "ordered-threshold",
    "path": "nats/jetstream.go",
    "old": "\tcase s.ordered():\n\t\treturn orderedInactiveThreshold\n",
@@ -182,6 +450,22 @@
    "old": "\t\th.Set(jetstream.MsgIDHeader, id)\n",
    "new": "\t\t_ = id\n",
    "intent": "Mesh-Message-Id no longer sets Nats-Msg-Id on sent messages, so streams don't drop duplicates.",
+   "expect": "killed"
+  },
+  {
+   "id": "pub-cancelled-ctx",
+   "path": "nats/client.go",
+   "old": "\tif err := ctx.Err(); err != nil {\n\t\treturn err\n\t}\n\tm := &natsio.Msg{",
+   "new": "\tm := &natsio.Msg{",
+   "intent": "A core publish with a cancelled context is sent instead of returning the context's error.",
+   "expect": "killed"
+  },
+  {
+   "id": "pub-header-msg-id",
+   "path": "nats/client.go",
+   "old": "\t\tHeader:  outgoingHeader(msg.Metadata),\n\t\tData:    msg.Payload,\n\t}\n\tif stream == \"\" {",
+   "new": "\t\tHeader:  toHeader(msg.Metadata),\n\t\tData:    msg.Payload,\n\t}\n\tif stream == \"\" {",
+   "intent": "A publish no longer copies Mesh-Message-Id to Nats-Msg-Id.",
    "expect": "killed"
   },
   {
@@ -209,11 +493,60 @@
    "expect": "killed"
   },
   {
+   "id": "receiver-after-stop",
+   "path": "nats/runtime_public.go",
+   "old": "\tif r.state != stateRunning {\n\t\treturn nil, false\n\t}\n",
+   "new": "",
+   "intent": "Receiver returns a handle before Start and after Stop.",
+   "expect": "killed"
+  },
+  {
+   "id": "receiver-group-none",
+   "path": "nats/runtime_public.go",
+   "old": "\t\treturn mesh.ConsumerGroupNone\n",
+   "new": "\t\treturn \"\"\n",
+   "intent": "Receiver.ConsumerGroup reports an empty string instead of none for a receiver with no group.",
+   "expect": "survives",
+   "reason": "unreviewed"
+  },
+  {
+   "id": "reply-error-text",
+   "path": "nats/runtime_serve.go",
+   "old": "reply.Header.Set(mesh.HandlerErrorKey, err.Error())",
+   "new": "reply.Header.Set(mesh.HandlerErrorKey, \"\")",
+   "intent": "A failed endpoint's reply carries no error text.",
+   "expect": "killed"
+  },
+  {
    "id": "req-mesh-timeout-wait",
    "path": "nats/client.go",
    "old": "\tctx, cancel, wait := boundContext(ctx, timeout)\n\tdefer cancel()\n\n\th := outgoingHeader(msg.Metadata)\n\tif h == nil {\n\t\th = natsio.Header{}\n\t}\n\th.Set(mesh.TimeoutKey, strconv.FormatInt(wait.Milliseconds(), 10))",
    "new": "\tctx, cancel, _ := boundContext(ctx, timeout)\n\tdefer cancel()\n\n\th := outgoingHeader(msg.Metadata)\n\tif h == nil {\n\t\th = natsio.Header{}\n\t}\n\th.Set(mesh.TimeoutKey, strconv.FormatInt(timeout.Milliseconds(), 10))",
    "intent": "Mesh-Timeout reports request_timeout even when the context deadline comes sooner.",
+   "expect": "killed"
+  },
+  {
+   "id": "req-reply-metadata",
+   "path": "nats/client.go",
+   "old": "\t\tMetadata: fromHeader(reply.Header),\n",
+   "new": "\t\tMetadata: nil,\n",
+   "intent": "A reply's metadata is dropped.",
+   "expect": "killed"
+  },
+  {
+   "id": "req-reply-target",
+   "path": "nats/client.go",
+   "old": "\t\tTarget:   msg.Target,\n\t\tMetadata: fromHeader",
+   "new": "\t\tTarget:   mesh.Target{},\n\t\tMetadata: fromHeader",
+   "intent": "A reply comes back with an empty target instead of the request's target.",
+   "expect": "killed"
+  },
+  {
+   "id": "req-stream-cond",
+   "path": "nats/client.go",
+   "old": "\tif v := opts[StreamKey]; v != \"\" {\n\t\treturn mesh.Message{}",
+   "new": "\tif v := opts[StreamKey]; v == \"\" {\n\t\treturn mesh.Message{}",
+   "intent": "Every request without a stream setting fails with ErrBadConfig.",
    "expect": "killed"
   },
   {
@@ -225,6 +558,22 @@
    "expect": "killed"
   },
   {
+   "id": "segment-gt-wildcard",
+   "path": "nats/target.go",
+   "old": "case c == '*' || c == '>':",
+   "new": "case c == '*':",
+   "intent": "A segment containing > is accepted.",
+   "expect": "killed"
+  },
+  {
+   "id": "segment-nonprintable",
+   "path": "nats/target.go",
+   "old": "\t\tcase !unicode.IsPrint(c):\n\t\t\treturn fmt.Errorf(\"contains non-printable character\")\n",
+   "new": "",
+   "intent": "A segment with a non-printable character is accepted.",
+   "expect": "killed"
+  },
+  {
    "id": "settle-running",
    "path": "nats/jetstream.go",
    "old": "running = d.state == deliveryRunning",
@@ -233,11 +582,60 @@
    "expect": "killed"
   },
   {
+   "id": "start-cancelled-ctx",
+   "path": "nats/runtime.go",
+   "old": "\treturn ctx.Err()\n}",
+   "new": "\treturn nil\n}",
+   "intent": "Start with a cancelled context starts the runtime instead of returning the context's error.",
+   "expect": "survives",
+   "reason": "unreviewed"
+  },
+  {
    "id": "stop-wait-subs",
    "path": "nats/runtime.go",
    "old": "\t\twaitSubscriptionsDrained(r.client.nc, subs)\n",
    "new": "",
    "intent": "Stop closes intake before core subscriptions finish draining, so requests waiting for a handler are dropped.",
+   "expect": "killed"
+  },
+  {
+   "id": "subject-no-segments",
+   "path": "nats/target.go",
+   "old": "\tif len(t.Segments) == 0 {\n\t\treturn \"\", fmt.Errorf(\"%w: no segments\", mesh.ErrInvalidTarget)\n\t}\n",
+   "new": "",
+   "intent": "A target with no segments is accepted instead of returning ErrInvalidTarget.",
+   "expect": "killed"
+  },
+  {
+   "id": "subscriber-panic-ok",
+   "path": "nats/runtime_serve.go",
+   "old": "\t\t\terr = fmt.Errorf(\"panic: %v\", p)\n",
+   "new": "\t\t\terr = nil\n",
+   "intent": "A panicking subscriber handler counts as success, so its JetStream message is acked.",
+   "expect": "killed"
+  },
+  {
+   "id": "timeout-error-passthrough",
+   "path": "nats/client.go",
+   "old": "\t\treturn natsio.ErrTimeout\n",
+   "new": "\t\treturn err\n",
+   "intent": "Expiry of request_timeout is reported as context.DeadlineExceeded instead of ErrTimeout.",
+   "expect": "killed"
+  },
+  {
+   "id": "to-header-empty-cond",
+   "path": "nats/header.go",
+   "old": "\tif len(md) == 0 {\n\t\treturn nil\n\t}\n\th := make(natsio.Header",
+   "new": "\tif len(md) != 0 {\n\t\treturn nil\n\t}\n\th := make(natsio.Header",
+   "intent": "Message metadata is never sent as headers.",
+   "expect": "killed"
+  },
+  {
+   "id": "warn-handler-running",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\tattrs = append(attrs, \"handler_running\", running)\n",
+   "new": "\t_ = running\n",
+   "intent": "The drain-end warning has no handler_running attribute.",
    "expect": "killed"
   }
  ]

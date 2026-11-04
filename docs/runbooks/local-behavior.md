@@ -279,6 +279,61 @@ go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED -n 10
 Each instance handles some of the ten, and no message reaches both. A third
 `serve` with `-group other` handles all ten.
 
+### Ack Policies
+
+`double` and `explicit` create the same consumer on the server, with NATS's
+explicit ack policy. They differ in how the runtime sends each ack: `double`
+sends it as a request and waits for the server to confirm it, and `explicit`
+publishes it without waiting. A plain subscriber on the stream's ack subjects
+shows the difference, because only a request carries a reply subject. This
+is the one check that uses the `nats` command-line tool, installed with
+`brew install nats-io/nats-tools/nats`.
+
+```sh
+# terminal 4
+nats sub '$JS.ACK.DEMO_CREATED.>'
+# terminal 2
+go run ./docs/runbooks/cmd/serve -group ack-double -set stream=DEMO_CREATED -set deliver_policy=new -set ack_policy=double
+# terminal 3
+go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED
+```
+
+Terminal 4 prints the ack with a reply subject:
+
+```
+[#1] Received on "$JS.ACK.DEMO_CREATED.ack-double.1.1.1.1793761149456144000.0" with reply "_INBOX.ENt599afC8rSqx8U5lXjWd.zy7XFW4q"
++ACK
+```
+
+The same steps with `-group ack-explicit -set ack_policy=explicit` print the
+ack with no reply subject:
+
+```
+[#1] Received on "$JS.ACK.DEMO_CREATED.ack-explicit.1.2.1.1793761152391687000.0"
++ACK
+```
+
+With either policy, a failing handler's message is nacked and comes again.
+With `-fail 1` added, terminal 2 prints `call 1` with
+`Mesh-Delivery-Attempt: 1` and then `call 2` with `Mesh-Delivery-Attempt: 2`.
+
+`none` on a named group acks nothing, so delivery is at most once:
+
+```sh
+# terminal 2
+go run ./docs/runbooks/cmd/serve -group once -set stream=DEMO_CREATED -set deliver_policy=new -set ack_policy=none -fail 1
+# terminal 3
+go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED
+```
+
+Terminal 2 prints the consumer with `ack_policy=AckNone max_deliver=-1`, then
+one `call 1` with `context deadline: none`, which fails and is not delivered
+again. Terminal 4, if still running, prints no ack.
+
+`none` on a subscriber whose `ConsumerGroup` is `none` gives an ordered
+consumer, as described under
+[none Consumers and Ordered Consumers](#none-consumers-and-ordered-consumers).
+
 ### Retries: max_deliver, nak_delay, and backoff
 
 ```sh

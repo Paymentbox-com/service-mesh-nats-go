@@ -119,3 +119,24 @@ func TestReceiver_Consumer(t *testing.T) {
 		t.Fatalf("consumer %q, want audit", name)
 	}
 }
+
+func TestRuntime_ReceiverBeforeStart(t *testing.T) {
+	url := startServer(t)
+	r := newRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+
+	if _, ok := r.Receiver(echoTarget); ok {
+		t.Fatal("want no receiver before Start")
+	}
+}
+
+func TestRuntime_ReceiverAfterStop(t *testing.T) {
+	url := startServer(t)
+	r := startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	if err := r.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := r.Receiver(echoTarget); ok {
+		t.Fatal("want no receiver after Stop")
+	}
+}
