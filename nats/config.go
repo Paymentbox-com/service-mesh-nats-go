@@ -72,12 +72,15 @@ const (
 	AckPolicyKey = "ack_policy"
 
 	// AckWaitKey is how long the server waits for an ack before it sends a
-	// message again, as a Go duration string. Default "30s".
+	// message again, as a Go duration string. Default "30s". Ignored when
+	// BackoffKey is set.
 	AckWaitKey = "ack_wait"
 
-	// BackoffKey is a comma-separated list of Go duration strings that
-	// replaces AckWaitKey for each redelivery in turn. MaxDeliverKey must
-	// exceed its length.
+	// BackoffKey is a comma-separated list of Go duration strings, one for
+	// each delivery in turn, that set how long the server waits for an ack
+	// before it sends the message again. Deliveries past the end of the list
+	// use its last entry. The server sets the consumer's ack wait to the
+	// first entry. MaxDeliverKey must exceed its length.
 	BackoffKey = "backoff"
 
 	// NakDelayKey is how long the server waits before it sends a failed

@@ -76,9 +76,9 @@ settings of a subscriber that has `stream`, and ignored everywhere else.
 | `request_timeout` | `Publish` | the client's `request_timeout` | Bounds the wait for the ack. | No. It bounds how long the client waits for the server's ack. A JetStream publish carries no `Mesh-Timeout`. |
 | `create_consumer` | subscriber | `true` | `false` leaves a named group's consumer to be created and updated outside the runtime. | No. It decides whether the runtime sends consumer settings at all. |
 | `ack_policy` | subscriber | `double` | `double`, `explicit`, or `none`, described under [Ack Policies](#ack-policies). | Yes, to the server, in the consumer's settings: explicit for `double` and `explicit`, none for `none`. |
-| `ack_wait` | subscriber | `30s` | Time allowed before an unacked message is sent again. | Yes, to the server, in the consumer's settings. |
+| `ack_wait` | subscriber | `30s` | Time allowed before an unacked message is sent again. Ignored when `backoff` is set. | Yes, to the server, in the consumer's settings. |
 | `max_deliver` | subscriber | the runtime configuration's `max_deliver`, which defaults to `5` | The most times one message is delivered. | Yes, to the server, in the consumer's settings. |
-| `backoff` | subscriber | none | Comma-separated delays, one for each delivery in turn, that replace `ack_wait`. `max_deliver` must exceed the number of delays. | Yes, to the server, in the consumer's settings. |
+| `backoff` | subscriber | none | Comma-separated delays, one for each delivery in turn, that set the time allowed before an unacked message is sent again. Deliveries past the last delay use the last delay. The server sets `ack_wait` to the first delay. `max_deliver` must exceed the number of delays. | Yes, to the server, in the consumer's settings. |
 | `nak_delay` | subscriber | none | Delay before a failed message is sent again. Unset sends it again right away. | Yes, to the server, with each nak. |
 | `max_ack_pending` | subscriber | `1000` | The most unacked messages the consumer allows at once. | Yes, to the server, in the consumer's settings. |
 | `deliver_policy` | subscriber | `all` | `all` or `new`, where a newly created consumer starts in the stream. | Yes, to the server, in the consumer's settings. |
@@ -199,8 +199,8 @@ fail.
 A handler that returns nil is acked. A handler that returns an error or
 panics is logged and nacked. The nak sends the message again right away, or
 after `nak_delay` when it is set. `max_deliver` bounds how many times one
-message is delivered, and `backoff` spaces out redelivery after a missed ack
-deadline.
+message is delivered, and `backoff` sets the ack deadline of each delivery
+in turn.
 
 Handlers need to be idempotent, because a message can be handled more than
 once after a missed deadline, a failed ack, or a nak at the end of a drain.

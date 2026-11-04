@@ -146,6 +146,8 @@ go run ./docs/runbooks/cmd/serve -cfg concurrency=many
 go run ./docs/runbooks/cmd/serve -cfg max_deliver=0
 go run ./docs/runbooks/cmd/serve -set stream=DEMO_CREATED -set ack_policy=all
 go run ./docs/runbooks/cmd/serve -group none -set stream=DEMO_CREATED -set create_consumer=false
+go run ./docs/runbooks/cmd/serve -cfg pull_expiry=soon
+go run ./docs/runbooks/cmd/serve -set stream=DEMO_CREATED -set pull_max_messages=0
 ```
 
 For example, the fourth prints
@@ -359,9 +361,10 @@ go run ./docs/runbooks/cmd/serve -group bo -set stream=DEMO_CREATED -set deliver
 go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED
 ```
 
-The consumer prints `ack_wait=2s max_deliver=3 backoff=[2s 10s]`. The
-message arrives again 2s after the first delivery and 10s after the second,
-while the earlier handlers are still running:
+The consumer prints `ack_wait=2s max_deliver=3 backoff=[2s 10s]`, because
+the server sets `ack_wait` to the first `backoff` entry. The message arrives
+again 2s after the first delivery and 10s after the second, while the earlier
+handlers are still running:
 
 ```
 17:02:35 call 1: payload "hello 1"
@@ -433,6 +436,58 @@ go run ./docs/runbooks/cmd/serve -group layer2 -target stream=MISSING
 The first consumes from `DEMO_CREATED`, because the subscriber's own setting
 outranks the target's. The second exits with
 `Start: nats: API error: code=404 err_code=10059 description=stream not found`.
+
+### Pull Settings
+
+The pull settings decide how many messages a subscriber takes from its
+consumer before its handlers are ready for them. With a handler that holds
+the only slot, that number shows as ack pending, because the server counts
+every message the subscriber has taken as unacked.
+
+```sh
+# terminal 2
+go run ./docs/runbooks/cmd/serve -group pull -set stream=DEMO_CREATED -set deliver_policy=new \
+  -cfg concurrency=1 -work 60s -set ack_wait=60s -drain 1s
+# terminal 3
+go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED -n 20
+go run ./docs/runbooks/cmd/streams consumers DEMO_CREATED
+```
+
+With nats.go's default of 500, the subscriber takes all 20:
+
+```
+consumer "pull": pending 0, ack pending 20, redelivered 0, ...
+```
+
+Ctrl-C in terminal 2, then repeat with a new `-group` name for each line
+below, adding its flags to the `serve` command:
+
+| `serve` flags | Ack pending |
+|---|---|
+| `-set pull_max_messages=3` | 3 |
+| `-cfg pull_max_messages=3` | 3 |
+| `-target pull_max_messages=4` | 4 |
+| `-cfg pull_max_messages=3 -set pull_max_messages=5` | 5 |
+| `-set pull_max_bytes=1000` | 7 or 8, as many messages as fit in 1000 bytes |
+| `-set pull_max_messages=4 -set pull_threshold_messages=4` | 5 |
+| `-set pull_expiry=2s -set pull_heartbeat=1s` | 20 |
+
+The runtime configuration's value applies when the subscriber sets none, and
+the subscriber's own value outranks it. With the threshold equal to the
+batch, the subscriber pulls again as soon as the first message is handed
+off, so it takes one more. Every `serve` exits on Ctrl-C after its 1s drain.
+
+nats.go checks the limits of the pull settings when `Start` begins pulling:
+
+```sh
+go run ./docs/runbooks/cmd/serve -group pull-bad -set stream=DEMO_CREATED -set pull_expiry=500ms
+go run ./docs/runbooks/cmd/serve -group pull-bad -set stream=DEMO_CREATED -set pull_heartbeat=20s
+```
+
+They exit with
+`Start: nats: invalid jetstream option: nats: invalid jetstream option: expires value must be at least 1s`
+and
+`Start: nats: invalid jetstream option: nats: invalid jetstream option: the value of Heartbeat must be less than 50% of expiry`.
 
 ## Stopping
 
