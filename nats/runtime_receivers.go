@@ -41,12 +41,30 @@ func (r *Runtime) openReceivers(ctx context.Context, nc *natsio.Conn, js jetstre
 func (r *Runtime) subscribe(nc *natsio.Conn, b *subscription) (*natsio.Subscription, error) {
 	cb := func(m *natsio.Msg) {
 		arrival := time.Now()
-		r.dispatch(false, func() { r.serve(nc, b, m, arrival) })
+		r.dispatch(func() { r.serve(nc, b, m, arrival) })
 	}
 	if b.queue == "" {
 		return nc.Subscribe(b.subject, cb)
 	}
 	return nc.QueueSubscribe(b.subject, b.queue, cb)
+}
+
+// waitSubscriptionsDrained returns once every subscription has delivered its
+// buffered messages and closed, or the connection has closed. A subscription
+// on a connection that closed before the drain began is already invalid.
+func waitSubscriptionsDrained(nc *natsio.Conn, subs []*natsio.Subscription) {
+	closed := nc.StatusChanged(natsio.CLOSED)
+	defer nc.RemoveStatusListener(closed)
+	for _, s := range subs {
+		if !s.IsValid() {
+			continue
+		}
+		select {
+		case <-s.StatusChanged(natsio.SubscriptionClosed):
+		case <-closed:
+			return
+		}
+	}
 }
 
 // abortStart undoes a failed Start. It unsubscribes, stops the consumers,

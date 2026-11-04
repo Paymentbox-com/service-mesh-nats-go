@@ -412,6 +412,50 @@ func TestStop_DrainsInFlightHandler(t *testing.T) {
 	}
 }
 
+func TestStop_AnswersRequestsWaitingDuringDrain(t *testing.T) {
+	url := startServer(t)
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "1"
+	r := startRuntime(t, cfg, []mesh.Endpoint{{Target: echoTarget, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
+		entered <- struct{}{}
+		<-release
+		return mesh.Message{Payload: m.Payload}, nil
+	}}}, nil)
+	c := testClient(t, testConfig(url))
+
+	// The first request holds the only handler slot, and the other two wait
+	// behind it in the runtime.
+	replies := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		go func() {
+			_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
+			replies <- err
+		}()
+	}
+	<-entered
+	time.Sleep(100 * time.Millisecond) // let the other two reach the runtime
+
+	stopped := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), testWait)
+		defer cancel()
+		stopped <- r.Stop(ctx)
+	}()
+	time.Sleep(100 * time.Millisecond) // let Stop begin its drain
+	close(release)
+
+	if err := <-stopped; err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := <-replies; err != nil {
+			t.Fatalf("request %d during drain: %v", i+1, err)
+		}
+	}
+}
+
 func TestStop_DeadlineCancelsHandlers(t *testing.T) {
 	url := startServer(t)
 	entered := make(chan struct{})

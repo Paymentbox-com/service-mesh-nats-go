@@ -88,11 +88,11 @@
 // A Runtime is built from a Client the application constructed, and that
 // client is the runtime's connection. Runtime.Client returns it in every
 // state. Start subscribes every endpoint and subscriber on the client's connection and
-// flushes; on a closed client it returns ErrClosed. Stop unsubscribes, waits
-// for in-flight handlers until its context is done, cancels the handlers'
-// context, flushes, and closes the client. It returns ctx.Err() when
-// handlers were abandoned, after nacking every JetStream message not yet
-// settled. Start after Stop returns ErrStopped. Closing the
+// flushes; on a closed client it returns ErrClosed. Stop drains every
+// subscription and consumer, waits for in-flight handlers until its context
+// is done, cancels the handlers' context, flushes, and closes the client. It
+// returns ctx.Err() when handlers were abandoned, after nacking every
+// JetStream message not yet settled. Start after Stop returns ErrStopped. Closing the
 // client directly ends the runtime's connection; Stop afterwards returns the
 // drain result.
 //

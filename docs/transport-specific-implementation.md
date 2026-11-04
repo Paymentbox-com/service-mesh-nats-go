@@ -149,15 +149,20 @@ and the client as they were.
 
 ### Stopping
 
-`Stop` unsubscribes, waits for in-flight handlers until its context is done,
-cancels the handlers' context, flushes when every handler finished, and closes
-the client. It returns the context's error when handlers were abandoned. The
-specification's drain in seconds is the context's deadline.
+`Stop` drains every subscription and consumer, waits for in-flight handlers
+until its context is done, cancels the handlers' context, flushes when every
+handler finished, and closes the client. It returns the context's error when
+handlers were abandoned. The specification's drain in seconds is the
+context's deadline.
 
-JetStream consumers stop pulling when `Stop` begins, and the messages already
-pulled are handled during the drain. When the drain ends first, `Stop` naks
-the messages still unsettled and logs a warning for each, as described in
-[JetStream](jetstream.md#stopping).
+Draining stops new deliveries when `Stop` begins. Messages the runtime has
+already received are still handed to their handlers, including requests
+waiting for a free handler under `concurrency`, so those requests get their
+replies.
+
+When the drain ends first, `Stop` naks the JetStream messages still unsettled
+and logs a warning for each, as described in [JetStream](jetstream.md#stopping).
+Core messages still buffered at that point are dropped.
 
 `Stop` on a runtime that is not running returns nil and leaves the client as it
 is. Closing the client directly ends the runtime's connection, and a `Stop`

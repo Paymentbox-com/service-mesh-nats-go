@@ -51,12 +51,10 @@ type Runtime struct {
 
 	running atomic.Bool
 
-	// accepting and jsAccepting gate new handler goroutines for core
-	// subscriptions and JetStream consumers, so no callback can add to wg
+	// accepting gates new handler goroutines, so no callback can add to wg
 	// once Stop has begun waiting.
-	acceptMu    sync.RWMutex
-	accepting   bool
-	jsAccepting bool
+	acceptMu  sync.RWMutex
+	accepting bool
 
 	// pending holds the deliveries from acking consumers that are not yet
 	// settled, so Stop can nak them when its drain ends.
@@ -195,16 +193,17 @@ func (r *Runtime) checkStartable(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// Stop stops receiving, waits for in-flight handlers until ctx is done,
-// cancels the handlers' context, flushes, and closes the client. It returns
-// ctx.Err() when handlers were abandoned. Stop on a runtime that is not
-// running does nothing. When the client was closed directly, Stop skips the
-// flush and returns the drain result.
+// Stop drains every subscription and consumer, waits for in-flight handlers
+// until ctx is done, cancels the handlers' context, flushes, and closes the
+// client. It returns ctx.Err() when handlers were abandoned. Stop on a
+// runtime that is not running does nothing. When the client was closed
+// directly, Stop skips the flush and returns the drain result.
 //
-// JetStream consumers stop pulling, and the messages already pulled are
-// handled during the drain. When ctx is done first, every message from an
-// acking consumer that is not yet settled is nacked and logged as a warning,
-// whether its handler had not started or was still running.
+// Draining stops new deliveries and hands the messages already received to
+// their handlers. When ctx is done first, every message from an acking
+// consumer that is not yet settled is nacked and logged as a warning,
+// whether its handler had not started or was still running. Core messages
+// still buffered then are dropped.
 func (r *Runtime) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -215,19 +214,17 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	r.state = stateStopped
 	r.running.Store(false)
 
-	for _, s := range r.subs {
-		_ = s.Unsubscribe()
+	subs, consumers := r.subs, r.consumers
+	for _, s := range subs {
+		_ = s.Drain()
 	}
-	r.acceptMu.Lock()
-	r.accepting = false
-	r.acceptMu.Unlock()
-	consumers := r.consumers
 	for _, c := range consumers {
 		c.cc.Drain()
 	}
 
 	done := make(chan struct{})
 	go func() {
+		waitSubscriptionsDrained(r.client.nc, subs)
 		for _, c := range consumers {
 			<-c.cc.Closed()
 		}
@@ -245,22 +242,27 @@ func (r *Runtime) Stop(ctx context.Context) error {
 	r.cancelHandlers()
 
 	if drainErr != nil {
-		r.setAccepting(false)
-		r.abandonPending()
-		// Messages still buffered reach the callbacks, which nak them.
-		waitConsumersClosed(consumers, flushBudget)
-	}
-
-	if nc, err := r.client.connection(); err == nil && drainErr == nil {
-		if err := flush(ctx, nc, flushBudget); err != nil {
-			r.logger.Warn("nats: flush during stop failed", "error", err)
-		}
+		r.abandonDrain(consumers)
+	} else {
+		r.flushOnStop(ctx)
 	}
 
 	_ = r.client.Close()
 	r.subs = nil
 	r.consumers = nil
 	return drainErr
+}
+
+// flushOnStop flushes the client's connection so the server has every reply
+// and ack, unless the client was closed directly.
+func (r *Runtime) flushOnStop(ctx context.Context) {
+	nc, err := r.client.connection()
+	if err != nil {
+		return
+	}
+	if err := flush(ctx, nc, flushBudget); err != nil {
+		r.logger.Warn("nats: flush during stop failed", "error", err)
+	}
 }
 
 // flush round-trips to the server. nats.go requires a deadline, so fallback

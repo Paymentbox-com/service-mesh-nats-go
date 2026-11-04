@@ -1,30 +1,22 @@
 package nats
 
-func (r *Runtime) isAccepting(jetStream bool) bool {
+func (r *Runtime) isAccepting() bool {
 	r.acceptMu.RLock()
 	defer r.acceptMu.RUnlock()
-	return r.acceptingLocked(jetStream)
-}
-
-func (r *Runtime) acceptingLocked(jetStream bool) bool {
-	if jetStream {
-		return r.jsAccepting
-	}
 	return r.accepting
 }
 
 func (r *Runtime) setAccepting(on bool) {
 	r.acceptMu.Lock()
 	r.accepting = on
-	r.jsAccepting = on
 	r.acceptMu.Unlock()
 }
 
 // dispatch runs fn on its own goroutine, bounded by the concurrency
 // semaphore and tracked for drain. It reports false, and does not run fn,
-// for a message arriving after its kind of subscription stopped accepting.
-func (r *Runtime) dispatch(jetStream bool, fn func()) bool {
-	if !r.isAccepting(jetStream) {
+// for a message arriving after the runtime stopped accepting.
+func (r *Runtime) dispatch(fn func()) bool {
+	if !r.isAccepting() {
 		return false
 	}
 	select {
@@ -36,7 +28,7 @@ func (r *Runtime) dispatch(jetStream bool, fn func()) bool {
 	// Checked again under the lock, so no handler is added to wg once Stop
 	// has begun waiting.
 	r.acceptMu.RLock()
-	if !r.acceptingLocked(jetStream) {
+	if !r.accepting {
 		r.acceptMu.RUnlock()
 		<-r.sem
 		return false

@@ -28,6 +28,15 @@ func (r *Runtime) consume(ctx context.Context, js jetstream.JetStream, b *subscr
 	return c, nil
 }
 
+// abandonDrain closes intake, naks every message not yet settled, and waits
+// for messages still buffered in the consumers to reach the callbacks, which
+// nak them too.
+func (r *Runtime) abandonDrain(consumers []*jsConsumer) {
+	r.setAccepting(false)
+	r.abandonPending()
+	waitConsumersClosed(consumers, flushBudget)
+}
+
 // waitConsumersClosed waits until every consumer has stopped delivering, or
 // budget passes.
 func waitConsumersClosed(consumers []*jsConsumer, budget time.Duration) {
@@ -49,7 +58,7 @@ func (r *Runtime) receive(c *jsConsumer, m jetstream.Msg) {
 		r.pending[d] = struct{}{}
 		r.pendingMu.Unlock()
 	}
-	if !r.dispatch(true, func() { r.serveJetStream(d) }) && c.acks {
+	if !r.dispatch(func() { r.serveJetStream(d) }) && c.acks {
 		r.abandon(d)
 	}
 }
