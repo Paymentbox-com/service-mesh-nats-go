@@ -43,6 +43,7 @@ func main() {
 	group := flag.String("group", "", "ConsumerGroup: empty for the deployment group, none, or a name")
 	fail := flag.Int("fail", 0, "fail the first N handler calls")
 	work := flag.Duration("work", 0, "how long each handler call runs before it returns")
+	ignoreCtx := flag.Bool("ignore-ctx", false, "keep working through -work after the handler's context is done")
 	drain := flag.Duration("drain", 10*time.Second, "the drain budget Stop gets on Ctrl-C")
 	flag.Var(cfg, "cfg", "a Config value, key=value, repeatable")
 	flag.Var(set, "set", "an Endpoint or Subscriber metadata setting, key=value, repeatable")
@@ -64,12 +65,16 @@ func main() {
 	var calls atomic.Int32
 	handle := func(ctx context.Context, m mesh.Message) error {
 		n := calls.Add(1)
+		start := time.Now()
 		printMessage(n, ctx, m)
 		if *work > 0 {
 			select {
 			case <-time.After(*work):
 			case <-ctx.Done():
 				log.Printf("call %d: context done: %v", n, ctx.Err())
+				if *ignoreCtx {
+					<-time.After(time.Until(start.Add(*work)))
+				}
 			}
 		}
 		if int(n) <= *fail {

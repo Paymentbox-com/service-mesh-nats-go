@@ -32,7 +32,8 @@ These are the other flags.
 | `serve`, `send` | `-subject` | `demo.created` | The target's subject. |
 | `serve` | `-group` | empty | The `ConsumerGroup` field: empty for the deployment group, `none`, or a name. |
 | `serve` | `-fail` | `0` | Fail the first N handler calls. |
-| `serve` | `-work` | `0` | How long each handler call runs. |
+| `serve` | `-work` | `0` | How long each handler call runs. It stops early when the handler's context is done. |
+| `serve` | `-ignore-ctx` | off | Keep running for the whole `-work` after the handler's context is done, like a handler that ignores its deadline. |
 | `serve` | `-drain` | `10s` | The drain budget `Stop` gets on Ctrl-C. |
 | `send` | `-n` | `1` | How many messages to send. |
 | `send` | `-payload` | `hello` | The payload. Each message appends its number. |
@@ -291,17 +292,40 @@ go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED
 The message arrives three times, a second apart, with `Mesh-Delivery-Attempt`
 1, 2, and 3, and then stops.
 
+A failed handler's message is nacked, and a nak without `nak_delay` sends it
+again right away. `backoff` applies only when a delivery is not settled before
+its deadline, so it shows with a handler that runs past its deadline:
+
 ```sh
 # terminal 2
 go run ./docs/runbooks/cmd/serve -group bo -set stream=DEMO_CREATED -set deliver_policy=new \
-  -set backoff=2s,4s -set max_deliver=3 -fail 99
+  -set backoff=2s,10s -set max_deliver=3 -work 30s -ignore-ctx -drain 1s
+# terminal 3
+go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED
 ```
 
-The consumer prints `ack_wait=2s max_deliver=3 backoff=[2s 4s]`. After a
-publish from terminal 3, the context deadline is 2s on the first delivery and
-4s on the second, from the `backoff` entry for each delivery.
+The consumer prints `ack_wait=2s max_deliver=3 backoff=[2s 10s]`. The
+message arrives again 2s after the first delivery and 10s after the second,
+while the earlier handlers are still running:
 
-### Settings the Server Won't Change
+```
+17:02:35 call 1: payload "hello 1"
+    Mesh-Delivery-Attempt: 1
+17:02:37 call 2: payload "hello 1"
+    Mesh-Delivery-Attempt: 2
+17:02:47 call 3: payload "hello 1"
+    Mesh-Delivery-Attempt: 3
+```
+
+Each delivery's context deadline is its arrival plus its `backoff` entry. The
+same command with `-fail 99` in place of `-work 30s -ignore-ctx` delivers all
+three right away, because each failure is nacked before its deadline.
+
+### Consumer Settings the Server Won't Change
+
+The runtime creates or updates a named group's consumer at every `Start`. The
+server refuses some changes to a consumer after it is created, and
+`deliver_policy` is one of them.
 
 ```sh
 go run ./docs/runbooks/cmd/serve -group drain -set stream=DEMO_CREATED -set deliver_policy=new
@@ -357,12 +381,17 @@ outranks the target's. The second exits with
 
 ## Stopping
 
+`serve` starts first, so its consumer exists before the publish. With
+`deliver_policy=new`, a consumer created after the publish never sees it. The
+message ID differs on every run, because the stream drops a repeated
+`Mesh-Message-Id` within its two-minute duplicate window without an error.
+
 ```sh
 # terminal 2
 go run ./docs/runbooks/cmd/serve -group drain2 -set stream=DEMO_CREATED -set deliver_policy=new -work 30s -drain 1s
-# terminal 3
-go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED -md Mesh-Message-Id=drain-1
-# terminal 2, while the handler runs: Ctrl-C
+# terminal 3, once terminal 2 prints "serving"
+go run ./docs/runbooks/cmd/send -set stream=DEMO_CREATED -md Mesh-Message-Id=drain-$(date +%s)
+# terminal 2, within 30s of "call 1", while the handler runs: Ctrl-C
 ```
 
 The drain ends before the handler, so `Stop` cancels the handler's context and
@@ -371,12 +400,16 @@ naks the message:
 ```
 stopping with a 1s drain
 call 1: context done: context canceled
-WARN nats: nacked a message at the end of the drain subject=demo.created stream=DEMO_CREATED consumer=drain2 stream_sequence=5 message_id=drain-1 handler_running=true
+WARN nats: nacked a message at the end of the drain subject=demo.created stream=DEMO_CREATED consumer=drain2 stream_sequence=1 message_id=drain-1762215260 handler_running=true
 Stop: context deadline exceeded
 ```
 
-Starting the same command again delivers the message once more, with
-`Mesh-Delivery-Attempt: 2` and `Mesh-Message-Id: drain-1`.
+When terminal 2 prints `call 1` and then only `stopped` on Ctrl-C, the
+handler had already finished. When it prints no `call 1` at all, the publish
+was a duplicate or came before the consumer existed.
+
+Running the same `serve` command again delivers the message once more, with
+`Mesh-Delivery-Attempt: 2` and the same `Mesh-Message-Id`.
 
 ## Cleaning Up
 
