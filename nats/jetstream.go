@@ -326,8 +326,9 @@ const (
 	deliverySettled
 )
 
-// delivery is a JetStream message from an acking consumer, tracked from
-// arrival until it is settled by its handler's result or abandoned by Stop.
+// delivery is a JetStream message on its way from a consumer to its handler.
+// From an acking consumer, it is tracked from arrival until it is settled by
+// its handler's result or abandoned by Stop.
 type delivery struct {
 	consumer *jsConsumer
 	msg      jetstream.Msg
