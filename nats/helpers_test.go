@@ -26,9 +26,11 @@ func okEndpoint(ctx context.Context, m mesh.Message) (mesh.Message, error) { ret
 func okSubscriber(ctx context.Context, m mesh.Message) error               { return nil }
 
 // testConfig is the smallest Config New accepts, with url added when set.
-// NewClient reads the url and New the deployment group.
+// NewClient reads the url and New the deployment group. The 2s request
+// timeout keeps a request or publish that never gets an answer from holding
+// a test for the 30s default.
 func testConfig(url string) mesh.Config {
-	cfg := mesh.Config{mesh.DeploymentGroupKey: "test"}
+	cfg := mesh.Config{mesh.DeploymentGroupKey: "test", RequestTimeoutKey: "2s"}
 	if url != "" {
 		cfg[URLKey] = url
 	}

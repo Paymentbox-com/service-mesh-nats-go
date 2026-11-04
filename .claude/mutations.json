@@ -1,0 +1,244 @@
+{
+ "mutations": [
+  {
+   "id": "acks-server-policy",
+   "path": "nats/jetstream.go",
+   "old": "c.acks = s.ack != ackNone && cfg.AckPolicy != jetstream.AckNonePolicy",
+   "new": "c.acks = s.ack != ackNone",
+   "intent": "With create_consumer=false and a server-side ack policy of none, the runtime still acks and sets Mesh-Deadline.",
+   "expect": "killed"
+  },
+  {
+   "id": "backoff-bound",
+   "path": "nats/jetstream.go",
+   "old": "len(ack.backoff) >= ack.maxDeliver",
+   "new": "len(ack.backoff) > ack.maxDeliver",
+   "intent": "backoff with as many entries as max_deliver is accepted at New.",
+   "expect": "killed"
+  },
+  {
+   "id": "boot-no-responders",
+   "path": "nats/jetstream.go",
+   "old": "\t\tcase errors.Is(err, natsio.ErrNoResponders),\n\t\t\terrors.Is(err, jetstream.ErrJetStreamNotEnabled),",
+   "new": "\t\tcase errors.Is(err, natsio.ErrTimeout),\n\t\t\terrors.Is(err, jetstream.ErrJetStreamNotEnabled),",
+   "intent": "Start fails on a server without JetStream instead of passing the boot check.",
+   "expect": "killed"
+  },
+  {
+   "id": "bound-cause",
+   "path": "nats/client.go",
+   "old": "context.WithTimeoutCause(ctx, timeout, errRequestTimeout)",
+   "new": "context.WithTimeoutCause(ctx, timeout, context.DeadlineExceeded)",
+   "intent": "Expiry of request_timeout is reported as context.DeadlineExceeded instead of ErrTimeout.",
+   "expect": "killed"
+  },
+  {
+   "id": "bound-min",
+   "path": "nats/client.go",
+   "old": "wait = min(wait, max(time.Until(d), 0))",
+   "new": "wait = max(wait, max(time.Until(d), 0))",
+   "intent": "The time left is the later of request_timeout and the context deadline, so Mesh-Timeout overstates it.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-ack-wait",
+   "path": "nats/jetstream.go",
+   "old": "\t\tcfg.AckWait = ack.wait\n",
+   "new": "",
+   "intent": "The consumer is created without the subscriber's ack_wait.",
+   "expect": "killed"
+  },
+  {
+   "id": "cfg-max-deliver",
+   "path": "nats/jetstream.go",
+   "old": "\t\tcfg.MaxDeliver = ack.maxDeliver\n",
+   "new": "",
+   "intent": "The consumer is created without max_deliver, so a failing message is delivered without limit.",
+   "expect": "killed"
+  },
+  {
+   "id": "client-stream-name",
+   "path": "nats/client.go",
+   "old": "\tname := target.Metadata[StreamKey]\n",
+   "new": "\tname := target.Metadata[RequestTimeoutKey]\n",
+   "intent": "Client.Stream reads the wrong key, so it finds no stream for a target that names one.",
+   "expect": "killed"
+  },
+  {
+   "id": "create-false-none-guard",
+   "path": "nats/jetstream.go",
+   "old": "\t\tif group == \"\" {\n\t\t\treturn false, fmt.Errorf(\"%w: %s=%q needs a named consumer group\", ErrBadConfig, CreateConsumerKey, v)\n\t\t}\n",
+   "new": "",
+   "intent": "create_consumer=false on a none subscriber is accepted at New instead of returning ErrBadConfig.",
+   "expect": "killed"
+  },
+  {
+   "id": "deadline-index",
+   "path": "nats/jetstream.go",
+   "old": "i := min(max(int(delivered)-1, 0), n-1)",
+   "new": "i := min(max(int(delivered), 0), n-1)",
+   "intent": "A delivery's deadline uses the next backoff entry instead of its own.",
+   "expect": "killed"
+  },
+  {
+   "id": "default-max-deliver",
+   "path": "nats/config.go",
+   "old": "defaultMaxDeliver     = 5",
+   "new": "defaultMaxDeliver     = 4",
+   "intent": "A subscriber that sets no max_deliver gets 4 deliveries instead of the documented 5.",
+   "expect": "killed"
+  },
+  {
+   "id": "double-ack-branch",
+   "path": "nats/runtime_jetstream.go",
+   "old": "if b.js.ack == ackDouble {",
+   "new": "if b.js.ack == ackExplicit {",
+   "intent": "ack_policy double acks without waiting for confirmation, and explicit waits.",
+   "expect": "killed"
+  },
+  {
+   "id": "endpoint-ctx-deadline",
+   "path": "nats/runtime_serve.go",
+   "old": "\t\t\tctx, cancel = context.WithDeadline(ctx, deadline)\n",
+   "new": "\t\t\t_, cancel = context.WithDeadline(ctx, deadline)\n",
+   "intent": "An endpoint handler's context no longer carries the request's deadline.",
+   "expect": "killed"
+  },
+  {
+   "id": "group-none",
+   "path": "nats/target.go",
+   "old": "\tcase mesh.ConsumerGroupNone:\n\t\treturn \"\"\n",
+   "new": "\tcase mesh.ConsumerGroupNone:\n\t\treturn group\n",
+   "intent": "ConsumerGroup none becomes a queue group named \"none\" instead of a plain subscription.",
+   "expect": "killed"
+  },
+  {
+   "id": "handler-error-text",
+   "path": "nats/client.go",
+   "old": "\t\tif len(text) > 0 {\n\t\t\the.Text = text[0]\n\t\t}\n",
+   "new": "\t\t_ = text\n",
+   "intent": "A HandlerError comes back with empty Text instead of the handler's message.",
+   "expect": "killed"
+  },
+  {
+   "id": "incoming-msg-id",
+   "path": "nats/header.go",
+   "old": "\t\tmd[mesh.MessageIDKey] = id\n",
+   "new": "\t\t_ = id\n",
+   "intent": "A handler no longer sees Nats-Msg-Id copied into Mesh-Message-Id.",
+   "expect": "killed"
+  },
+  {
+   "id": "merge-over",
+   "path": "nats/target.go",
+   "old": "\tfor k, v := range over {\n\t\tmd[k] = v\n\t}\n",
+   "new": "",
+   "intent": "Per-call options and endpoint or subscriber metadata no longer override the target's settings.",
+   "expect": "killed"
+  },
+  {
+   "id": "meta-num-pending",
+   "path": "nats/jetstream.go",
+   "old": "strconv.FormatUint(meta.NumPending, 10)",
+   "new": "strconv.FormatUint(meta.NumDelivered, 10)",
+   "intent": "Mesh-Nats-Num-Pending carries the delivery count instead of the pending count.",
+   "expect": "killed"
+  },
+  {
+   "id": "nak-delay-cond",
+   "path": "nats/runtime_jetstream.go",
+   "old": "nakDelay; delay > 0 {",
+   "new": "nakDelay; delay < 0 {",
+   "intent": "A set nak_delay is ignored, so a failed message is sent again right away.",
+   "expect": "killed"
+  },
+  {
+   "id": "nak-delay-key",
+   "path": "nats/jetstream.go",
+   "old": "durationSetting(md, NakDelayKey, 0)",
+   "new": "durationSetting(md, AckWaitKey, 0)",
+   "intent": "nak_delay is read from ack_wait, so a set nak_delay has no effect.",
+   "expect": "killed"
+  },
+  {
+   "id": "named-threshold",
+   "path": "nats/jetstream.go",
+   "old": "\tdefault:\n\t\treturn namedInactiveThreshold\n",
+   "new": "\tdefault:\n\t\treturn 0\n",
+   "intent": "A named group's consumer takes the server's inactive threshold instead of 7 days.",
+   "expect": "killed"
+  },
+  {
+   "id": "ordered-threshold",
+   "path": "nats/jetstream.go",
+   "old": "\tcase s.ordered():\n\t\treturn orderedInactiveThreshold\n",
+   "new": "\tcase s.ordered():\n\t\treturn namedInactiveThreshold\n",
+   "intent": "An ordered consumer defaults to a 7-day inactive threshold instead of 5 minutes.",
+   "expect": "killed"
+  },
+  {
+   "id": "outgoing-msg-id",
+   "path": "nats/header.go",
+   "old": "\t\th.Set(jetstream.MsgIDHeader, id)\n",
+   "new": "\t\t_ = id\n",
+   "intent": "Mesh-Message-Id no longer sets Nats-Msg-Id on sent messages, so streams don't drop duplicates.",
+   "expect": "killed"
+  },
+  {
+   "id": "publish-expect-stream",
+   "path": "nats/client.go",
+   "old": "js.PublishMsg(ctx, m, jetstream.WithExpectStream(stream))",
+   "new": "js.PublishMsg(ctx, m)",
+   "intent": "A JetStream publish no longer expects the named stream, so a subject stored by another stream succeeds.",
+   "expect": "killed"
+  },
+  {
+   "id": "publish-js-timeout",
+   "path": "nats/client.go",
+   "old": "\tif stream != \"\" {\n\t\tif timeout, err = durationSetting(opts, RequestTimeoutKey, timeout)",
+   "new": "\tif stream == \"\" {\n\t\tif timeout, err = durationSetting(opts, RequestTimeoutKey, timeout)",
+   "intent": "A JetStream publish ignores request_timeout from its settings and waits for the client's configured timeout.",
+   "expect": "killed"
+  },
+  {
+   "id": "receive-abandon",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\tif !r.dispatch(func() { r.serveJetStream(d) }) && c.acks {\n\t\tr.abandon(d)\n\t}\n",
+   "new": "\tr.dispatch(func() { r.serveJetStream(d) })\n",
+   "intent": "A message that arrives after Stop closed intake is left unsettled instead of nacked and logged.",
+   "expect": "killed"
+  },
+  {
+   "id": "req-mesh-timeout-wait",
+   "path": "nats/client.go",
+   "old": "\tctx, cancel, wait := boundContext(ctx, timeout)\n\tdefer cancel()\n\n\th := outgoingHeader(msg.Metadata)\n\tif h == nil {\n\t\th = natsio.Header{}\n\t}\n\th.Set(mesh.TimeoutKey, strconv.FormatInt(wait.Milliseconds(), 10))",
+   "new": "\tctx, cancel, _ := boundContext(ctx, timeout)\n\tdefer cancel()\n\n\th := outgoingHeader(msg.Metadata)\n\tif h == nil {\n\t\th = natsio.Header{}\n\t}\n\th.Set(mesh.TimeoutKey, strconv.FormatInt(timeout.Milliseconds(), 10))",
+   "intent": "Mesh-Timeout reports request_timeout even when the context deadline comes sooner.",
+   "expect": "killed"
+  },
+  {
+   "id": "req-target-merge",
+   "path": "nats/client.go",
+   "old": "\topts = mergeSettings(msg.Target.Metadata, opts)\n\tif v := opts[StreamKey]; v != \"\" {\n\t\treturn mesh.Message{}",
+   "new": "\tif v := opts[StreamKey]; v != \"\" {\n\t\treturn mesh.Message{}",
+   "intent": "Request ignores settings in the target's metadata, such as request_timeout and stream.",
+   "expect": "killed"
+  },
+  {
+   "id": "settle-running",
+   "path": "nats/jetstream.go",
+   "old": "running = d.state == deliveryRunning",
+   "new": "running = d.state == deliveryWaiting",
+   "intent": "The drain-end warning reports handler_running backwards.",
+   "expect": "killed"
+  },
+  {
+   "id": "stop-wait-subs",
+   "path": "nats/runtime.go",
+   "old": "\t\twaitSubscriptionsDrained(r.client.nc, subs)\n",
+   "new": "",
+   "intent": "Stop closes intake before core subscriptions finish draining, so requests waiting for a handler are dropped.",
+   "expect": "killed"
+  }
+ ]
+}

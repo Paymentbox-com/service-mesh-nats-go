@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	natsio "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
@@ -91,7 +93,7 @@ func TestStart_NamedGroupConsumerCreatedThenUpdated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cons.CachedInfo().Config; got.AckWait != 10*time.Second || got.InactiveThreshold != 7*24*time.Hour {
+	if got := cons.CachedInfo().Config; got.AckWait != 10*time.Second || got.InactiveThreshold != 7*24*time.Hour || got.MaxDeliver != 5 {
 		t.Fatalf("created consumer settings %+v", got)
 	}
 	if err := r.Stop(context.Background()); err != nil {
@@ -277,12 +279,12 @@ func TestConsume_AckPolicyDouble(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
 	var s countingSubscriber
-	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "double", AckWaitKey: "1s"}
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "double", AckWaitKey: "500ms"}
 	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: s.handle}})
 
 	publishEvents(t, url, 1)
 	waitFor(t, func() bool { return s.total() == 1 && ackPending(t, stream, "audit") == 0 })
-	time.Sleep(1500 * time.Millisecond) // past ack_wait, so an unacked message would come again
+	time.Sleep(800 * time.Millisecond) // past ack_wait, so an unacked message would come again
 	if s.total() != 1 {
 		t.Fatalf("handled %d deliveries, want 1", s.total())
 	}
@@ -292,12 +294,12 @@ func TestConsume_AckPolicyExplicit(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")
 	var s countingSubscriber
-	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "explicit", AckWaitKey: "1s"}
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "explicit", AckWaitKey: "500ms"}
 	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: s.handle}})
 
 	publishEvents(t, url, 1)
 	waitFor(t, func() bool { return s.total() == 1 && ackPending(t, stream, "audit") == 0 })
-	time.Sleep(1500 * time.Millisecond) // past ack_wait, so an unacked message would come again
+	time.Sleep(800 * time.Millisecond) // past ack_wait, so an unacked message would come again
 	if s.total() != 1 {
 		t.Fatalf("handled %d deliveries, want 1", s.total())
 	}
@@ -381,7 +383,7 @@ func TestConsume_NakDelayDelaysRedelivery(t *testing.T) {
 	createStream(t, url, "EVENTS", "test.event")
 	var mu sync.Mutex
 	var times []time.Time
-	md := map[string]string{StreamKey: "EVENTS", NakDelayKey: "500ms"}
+	md := map[string]string{StreamKey: "EVENTS", NakDelayKey: "250ms"}
 	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
 		mu.Lock()
 		defer mu.Unlock()
@@ -400,8 +402,8 @@ func TestConsume_NakDelayDelaysRedelivery(t *testing.T) {
 	})
 	mu.Lock()
 	defer mu.Unlock()
-	if gap := times[1].Sub(times[0]); gap < 450*time.Millisecond {
-		t.Fatalf("redelivered after %s, want at least 500ms", gap)
+	if gap := times[1].Sub(times[0]); gap < 200*time.Millisecond {
+		t.Fatalf("redelivered after %s, want at least 250ms", gap)
 	}
 }
 
@@ -556,4 +558,195 @@ func TestStop_NaksMessagesPastTheDrain(t *testing.T) {
 	var s countingSubscriber
 	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: s.handle}})
 	waitFor(t, func() bool { return s.total() >= 2 })
+}
+
+func TestPublish_RequestTimeoutBoundsJetStreamPublish(t *testing.T) {
+	// A core subscriber and no stream: the publish waits for an ack that never
+	// comes, until request_timeout.
+	url := startServer(t)
+	nc, err := natsio.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	if _, err := nc.SubscribeSync("test.event"); err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	c := testClient(t, testConfig(url))
+
+	start := time.Now()
+	err = c.Publish(context.Background(), mesh.Message{Target: eventTarget}, map[string]string{StreamKey: "NOPE", RequestTimeoutKey: "200ms"})
+	if !errors.Is(err, natsio.ErrTimeout) || time.Since(start) > time.Second {
+		t.Fatalf("want natsio.ErrTimeout after about 200ms, got %v after %s", err, time.Since(start))
+	}
+}
+
+func TestStart_OrderedConsumerInactiveThreshold(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{
+		Target:        eventTarget,
+		ConsumerGroup: mesh.ConsumerGroupNone,
+		Metadata:      map[string]string{StreamKey: "EVENTS", AckPolicyKey: "none"},
+		Handler:       okSubscriber,
+	}})
+
+	rc, ok := r.Receiver(eventTarget)
+	if !ok {
+		t.Fatal("no receiver for the target")
+	}
+	info, err := rc.Consumer().Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Config.InactiveThreshold; got != 5*time.Minute {
+		t.Fatalf("ordered consumer inactive threshold %s, want 5m", got)
+	}
+}
+
+func TestConsume_DeadlineUsesBackoffEntry(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	seen := make(chan map[string]string, 1)
+	md := map[string]string{StreamKey: "EVENTS", BackoffKey: "1s,5s", MaxDeliverKey: "3"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		seen <- m.Metadata
+		return nil
+	}}})
+
+	published := time.Now()
+	publishEvents(t, url, 1)
+	var got map[string]string
+	select {
+	case got = <-seen:
+	case <-time.After(testWait):
+		t.Fatal("subscriber did not receive the message")
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, got[mesh.DeadlineKey])
+	if err != nil {
+		t.Fatalf("%s = %q: %v", mesh.DeadlineKey, got[mesh.DeadlineKey], err)
+	}
+	if until := deadline.Sub(published); until < 900*time.Millisecond || until > 2*time.Second {
+		t.Fatalf("first delivery's deadline is %s after the publish, want about 1s from backoff[0]", until)
+	}
+}
+
+func TestConsume_OutsideConsumerWithoutAcks(t *testing.T) {
+	url := startServer(t)
+	stream := createStream(t, url, "EVENTS", "test.event")
+	if _, err := stream.CreateConsumer(context.Background(), jetstream.ConsumerConfig{
+		Durable:       "audit",
+		FilterSubject: "test.event",
+		AckPolicy:     jetstream.AckNonePolicy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	type seenDelivery struct {
+		md map[string]string
+		ok bool
+	}
+	seen := make(chan seenDelivery, 1)
+	md := map[string]string{StreamKey: "EVENTS", CreateConsumerKey: "false"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		_, ok := ctx.Deadline()
+		seen <- seenDelivery{md: m.Metadata, ok: ok}
+		return nil
+	}}})
+
+	publishEvents(t, url, 1)
+	select {
+	case got := <-seen:
+		if v, has := got.md[mesh.DeadlineKey]; has || got.ok {
+			t.Fatalf("handler of a consumer that does not ack got %s %q and a context deadline %v", mesh.DeadlineKey, v, got.ok)
+		}
+	case <-time.After(testWait):
+		t.Fatal("subscriber did not receive the message")
+	}
+}
+
+// ackReply returns whether the runtime's ack for a delivery carried a reply
+// subject, which DoubleAck sets and Ack does not.
+func ackReply(t *testing.T, url, ackPolicy string) bool {
+	t.Helper()
+	createStream(t, url, "EVENTS", "test.event")
+	nc, err := natsio.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	acks, err := nc.SubscribeSync("$JS.ACK.EVENTS.>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: ackPolicy}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}})
+
+	publishEvents(t, url, 1)
+	m, err := acks.NextMsg(testWait)
+	if err != nil {
+		t.Fatalf("no ack seen: %v", err)
+	}
+	return m.Reply != ""
+}
+
+func TestConsume_AckPolicyDoubleWaitsForConfirmation(t *testing.T) {
+	if !ackReply(t, startServer(t), "double") {
+		t.Fatal("ack_policy double sent its ack without a reply subject, so it did not wait for the server")
+	}
+}
+
+func TestConsume_AckPolicyExplicitDoesNotWait(t *testing.T) {
+	if ackReply(t, startServer(t), "explicit") {
+		t.Fatal("ack_policy explicit sent its ack with a reply subject, so it waited for the server")
+	}
+}
+
+func TestStop_NaksMessagesBufferedWhenTheDrainEnds(t *testing.T) {
+	// With one handler slot, one message is running and one waits for the
+	// slot when the drain ends. The other three are still in nats.go's buffer
+	// and reach the runtime only after the drain has ended.
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	entered := make(chan struct{}, 5)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "1"
+	r := startRuntime(t, cfg, nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: map[string]string{StreamKey: "EVENTS"}, Handler: func(ctx context.Context, m mesh.Message) error {
+		entered <- struct{}{}
+		<-release
+		return nil
+	}}}, WithLogger(slog.New(logs)))
+
+	c := testClient(t, testConfig(url))
+	for i := 1; i <= 5; i++ {
+		msg := mesh.Message{Target: eventTarget, Metadata: map[string]string{mesh.MessageIDKey: fmt.Sprintf("m%d", i)}}
+		if err := c.Publish(context.Background(), msg, map[string]string{StreamKey: "EVENTS"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-entered
+	time.Sleep(200 * time.Millisecond) // let the other four reach the client
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := r.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop: want context.DeadlineExceeded, got %v", err)
+	}
+
+	warnings := logs.withMessage("nats: nacked a message at the end of the drain")
+	ids := map[string]bool{}
+	for _, w := range warnings {
+		ids[w["message_id"].String()] = true
+	}
+	if len(warnings) != 5 || len(ids) != 5 {
+		t.Fatalf("logged %d warnings for %d messages, want one for each of 5", len(warnings), len(ids))
+	}
 }
