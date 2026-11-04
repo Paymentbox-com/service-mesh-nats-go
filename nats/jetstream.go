@@ -61,6 +61,7 @@ type jsSettings struct {
 	ack      ackPolicy
 	nakDelay time.Duration
 	config   jetstream.ConsumerConfig
+	pull     pullSettings
 }
 
 // ordered reports whether the subscriber uses an ordered consumer.
@@ -69,8 +70,9 @@ func (s *jsSettings) ordered() bool {
 }
 
 // parseJetStream reads a Subscriber's JetStream options from md. It returns
-// nil when md sets no StreamKey. maxDeliver is the runtime's default.
-func parseJetStream(md map[string]string, subj, group string, maxDeliver int) (*jsSettings, error) {
+// nil when md sets no StreamKey. maxDeliver and pull are the runtime's
+// defaults.
+func parseJetStream(md map[string]string, subj, group string, maxDeliver int, pull pullSettings) (*jsSettings, error) {
 	stream := md[StreamKey]
 	if stream == "" {
 		return nil, nil
@@ -88,6 +90,9 @@ func parseJetStream(md map[string]string, subj, group string, maxDeliver int) (*
 		return nil, err
 	}
 	if s.config, err = consumerConfig(md, subj, s, maxDeliver); err != nil {
+		return nil, err
+	}
+	if s.pull, err = readPullSettings(md, pull); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -231,6 +236,62 @@ func backoffSetting(md map[string]string) ([]time.Duration, error) {
 		backoff = append(backoff, d)
 	}
 	return backoff, nil
+}
+
+// pullSettings are a subscriber's pull keys. Zero leaves a setting to
+// nats.go's default. nats.go checks their ranges when Start consumes.
+type pullSettings struct {
+	maxMessages       int
+	maxBytes          int
+	thresholdMessages int
+	expiry            time.Duration
+	heartbeat         time.Duration
+}
+
+// readPullSettings reads the pull keys from md over fallback.
+func readPullSettings(md map[string]string, fallback pullSettings) (pullSettings, error) {
+	p := fallback
+	var err error
+	if p.maxMessages, err = positiveIntSetting(md, PullMaxMessagesKey, p.maxMessages); err != nil {
+		return pullSettings{}, err
+	}
+	if p.maxBytes, err = positiveIntSetting(md, PullMaxBytesKey, p.maxBytes); err != nil {
+		return pullSettings{}, err
+	}
+	if p.thresholdMessages, err = positiveIntSetting(md, PullThresholdMessagesKey, p.thresholdMessages); err != nil {
+		return pullSettings{}, err
+	}
+	if p.expiry, err = durationSetting(md, PullExpiryKey, p.expiry); err != nil {
+		return pullSettings{}, err
+	}
+	if p.heartbeat, err = durationSetting(md, PullHeartbeatKey, p.heartbeat); err != nil {
+		return pullSettings{}, err
+	}
+	return p, nil
+}
+
+// consumeOpts returns the nats.go options for the pull settings that are
+// set. With both message and byte limits, the byte limit caps each batch.
+func (p pullSettings) consumeOpts() []jetstream.PullConsumeOpt {
+	var opts []jetstream.PullConsumeOpt
+	switch {
+	case p.maxMessages > 0 && p.maxBytes > 0:
+		opts = append(opts, jetstream.PullMaxMessagesWithBytesLimit(p.maxMessages, p.maxBytes))
+	case p.maxMessages > 0:
+		opts = append(opts, jetstream.PullMaxMessages(p.maxMessages))
+	case p.maxBytes > 0:
+		opts = append(opts, jetstream.PullMaxBytes(p.maxBytes))
+	}
+	if p.thresholdMessages > 0 {
+		opts = append(opts, jetstream.PullThresholdMessages(p.thresholdMessages))
+	}
+	if p.expiry > 0 {
+		opts = append(opts, jetstream.PullExpiry(p.expiry))
+	}
+	if p.heartbeat > 0 {
+		opts = append(opts, jetstream.PullHeartbeat(p.heartbeat))
+	}
+	return opts
 }
 
 // jsConsumer is a JetStream subscriber's consumer once Start has created or

@@ -857,3 +857,51 @@ func TestStart_FailureStopsEarlierConsumers(t *testing.T) {
 		t.Fatalf("consumer delivered %d messages after a failed Start, want 0", info.Delivered.Consumer)
 	}
 }
+
+// With one handler slot and a handler that never returns, the consumer stops
+// receiving once the first pull's messages are delivered, so the unacked
+// count is the pull size in effect.
+func TestConsume_PullMaxMessages(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     string
+		subscriber string
+		want       int
+	}{
+		{name: "nats.go default", want: 20},
+		{name: "subscriber", subscriber: "3", want: 3},
+		{name: "runtime config", config: "3", want: 3},
+		{name: "subscriber over runtime config", config: "3", subscriber: "5", want: 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			url := startServer(t)
+			stream := createStream(t, url, "EVENTS", "test.event")
+			cfg := testConfig(url)
+			cfg[ConcurrencyKey] = "1"
+			if tt.config != "" {
+				cfg[PullMaxMessagesKey] = tt.config
+			}
+			md := map[string]string{StreamKey: "EVENTS"}
+			if tt.subscriber != "" {
+				md[PullMaxMessagesKey] = tt.subscriber
+			}
+			release := make(chan struct{})
+			startRuntime(t, cfg, nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return nil
+			}}})
+			t.Cleanup(func() { close(release) }) // runs before Stop, so the drain finishes
+
+			publishEvents(t, url, 20)
+			waitFor(t, func() bool { return ackPending(t, stream, "audit") > 0 })
+			time.Sleep(300 * time.Millisecond) // give deliveries past the pull size time to show up
+			if got := ackPending(t, stream, "audit"); got != tt.want {
+				t.Fatalf("%d messages unacked, want %d", got, tt.want)
+			}
+		})
+	}
+}

@@ -9,19 +9,19 @@ import (
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
-// consume opens a JetStream subscriber's consumer and begins consuming it
-// with nats.go's default pull settings.
+// consume opens a JetStream subscriber's consumer and starts consuming it
+// with the subscriber's pull settings. From then on nats.go pulls messages
+// in batches and hands each one to receive, which can happen before consume
+// returns.
 func (r *Runtime) consume(ctx context.Context, js jetstream.JetStream, b *subscription) (*jsConsumer, error) {
 	c, err := openConsumer(ctx, js, b)
 	if err != nil {
 		return nil, err
 	}
-	c.cc, err = c.consumer.Consume(
-		func(m jetstream.Msg) { r.receive(c, m) },
-		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
-			r.logger.Warn("nats: consume error", "subject", b.subject, "stream", b.js.stream, "error", err)
-		}),
-	)
+	opts := append(b.js.pull.consumeOpts(), jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+		r.logger.Warn("nats: consume error", "subject", b.subject, "stream", b.js.stream, "error", err)
+	}))
+	c.cc, err = c.consumer.Consume(func(m jetstream.Msg) { r.receive(c, m) }, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +53,9 @@ func waitConsumersClosed(consumers []*jsConsumer, budget time.Duration) {
 // receive is the Consume callback of a JetStream consumer.
 func (r *Runtime) receive(c *jsConsumer, m jetstream.Msg) {
 	d := &delivery{consumer: c, msg: m, arrival: time.Now()}
+	// The message is tracked before dispatch so Stop can nak it even while
+	// it waits for a handler slot. Otherwise the server holds it until its
+	// ack wait runs out.
 	if c.acks {
 		r.pendingMu.Lock()
 		r.pending[d] = struct{}{}
@@ -90,6 +93,8 @@ func (r *Runtime) serveJetStream(d *delivery) {
 	if herr != nil {
 		r.logger.Error("nats: subscriber handler failed", "subject", b.subject, "stream", b.js.stream, "error", herr)
 	}
+	// Without acks there is no reply to send, and Stop never sees these
+	// deliveries, so they skip settle.
 	if !c.acks {
 		return
 	}
@@ -105,6 +110,9 @@ func (r *Runtime) serveJetStream(d *delivery) {
 		return
 	}
 	if b.js.ack == ackDouble {
+		// The handler's ctx may already be done, so waiting for the server's
+		// confirmation gets its own timeout. The handler slot stays taken
+		// until the wait ends.
 		actx, cancel := context.WithTimeout(context.Background(), r.client.requestTimeout)
 		defer cancel()
 		err = d.msg.DoubleAck(actx)

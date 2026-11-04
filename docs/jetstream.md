@@ -83,6 +83,11 @@ settings of a subscriber that has `stream`, and ignored everywhere else.
 | `max_ack_pending` | subscriber | `1000` | The most unacked messages the consumer allows at once. | Yes, to the server, in the consumer's settings. |
 | `deliver_policy` | subscriber | `all` | `all` or `new`, where a newly created consumer starts in the stream. | Yes, to the server, in the consumer's settings. |
 | `consumer_inactive_threshold` | subscriber | `168h` for a named group, `5m` for an ordered consumer, and the server's `5s` for other `none` consumers | How long the consumer outlives its last puller. | Yes, to the server, in the consumer's settings. |
+| `pull_max_messages` | subscriber | the runtime configuration's `pull_max_messages`, or `500` | The most messages one pull asks for and the subscriber holds in its buffer. Described under [Pulling](#pulling). | No. It sets the size of each pull request. |
+| `pull_max_bytes` | subscriber | the runtime configuration's `pull_max_bytes`, or none | The most bytes one pull asks for and the subscriber holds. Alone, it replaces the message limit. With `pull_max_messages`, it caps the bytes of each batch. It must hold the largest message, or the subscriber stalls. | No. It sets the size of each pull request. |
+| `pull_threshold_messages` | subscriber | the runtime configuration's `pull_threshold_messages`, or half of `pull_max_messages` | How few messages still owed from earlier pulls makes the subscriber pull again. | No. It decides when the subscriber pulls. |
+| `pull_expiry` | subscriber | the runtime configuration's `pull_expiry`, or `30s` | How long the server keeps a pull open while it has nothing to send. At least `1s`. | No. It sets how long each pull request lasts. |
+| `pull_heartbeat` | subscriber | the runtime configuration's `pull_heartbeat`, or half of `pull_expiry`, and `5s` for an ordered consumer | How often the server signals an open pull that has nothing to send. Two missed heartbeats make the subscriber pull again. From `500ms` to `30s`, and no more than half of `pull_expiry`. | No. It is requested with each pull. |
 
 The consumer's settings are sent only when the runtime creates or updates
 the consumer, so with `create_consumer = "false"` none of them are sent. No
@@ -91,6 +96,10 @@ option is sent as a message header under its own key.
 A value that does not parse, or is not one of its allowed values, makes `New`
 return `ErrBadConfig`. So does `create_consumer = "false"` on a subscriber
 whose `ConsumerGroup` is `none`.
+
+nats.go checks the limits of the pull settings when the subscriber starts
+pulling. A pull setting outside them passes `New`, and `Start` returns
+nats.go's `jetstream.ErrInvalidOption`.
 
 The consumer settings default to nats.go's defaults, except `max_deliver` and
 the inactive threshold of a named group. nats.go's `max_deliver` is
@@ -144,6 +153,25 @@ last stream sequence it saw, so no message in the stream is skipped.
 Messages from any consumer, including an ordered one, are handed to handlers
 that run concurrently, up to the runtime's `concurrency`. Handlers get no
 ordering guarantee.
+
+## Pulling
+
+A subscriber asks its consumer for messages in batches of up to
+`pull_max_messages`, and asks for more when fewer than
+`pull_threshold_messages` are still owed. Messages that arrive while every
+handler slot is busy wait in the subscriber's buffer.
+
+The server counts a buffered message as delivered and unacked:
+
+- Its `ack_wait` is already running. `Mesh-Deadline` is measured from when
+  the message leaves the buffer, so it can fall after the server sends the
+  message again.
+- It counts against `max_ack_pending`.
+- In a named group, other instances cannot take it, even when they are idle.
+
+With the default of 500 and a `concurrency` of a few handlers, most of each
+batch waits in the buffer. A `pull_max_messages` close to `concurrency` keeps
+each handler busy while holding few messages back.
 
 ## Ack Policies
 

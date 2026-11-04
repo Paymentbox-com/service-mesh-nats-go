@@ -71,9 +71,9 @@ var _ mesh.Runtime = (*Runtime)(nil)
 
 // New validates cfg and every endpoint and subscriber, and returns a runtime
 // that serves them on client's connection. cfg is read for
-// mesh.DeploymentGroupKey, which is required, ConcurrencyKey, and
-// MaxDeliverKey. Connection keys are ignored because client already carries
-// them. WithLogger sets the logger.
+// mesh.DeploymentGroupKey, which is required, ConcurrencyKey, MaxDeliverKey,
+// and the pull keys. Connection keys are ignored because client already
+// carries them. WithLogger sets the logger.
 //
 // The consumer group comes from each Endpoint's and Subscriber's
 // ConsumerGroup. Their settings are their Metadata over their Target's
@@ -125,7 +125,7 @@ func New(client *Client, cfg mesh.Config, endpoints []mesh.Endpoint, subscribers
 		}
 		b.subscriber = sub.Handler
 		md := mergeSettings(sub.Target.Metadata, sub.Metadata)
-		if b.js, err = parseJetStream(md, b.subject, b.queue, s.maxDeliver); err != nil {
+		if b.js, err = parseJetStream(md, b.subject, b.queue, s.maxDeliver, s.pull); err != nil {
 			return nil, err
 		}
 		r.subscriptions = append(r.subscriptions, b)
@@ -144,8 +144,9 @@ func (r *Runtime) Running() bool {
 //
 // Start first returns ErrStreamCoversRoute when a stream covers an endpoint
 // subject. A server without JetStream passes this check. It then looks up
-// each JetStream subscriber's stream and creates or looks up its consumer,
-// returning the nats.go error unchanged when one fails.
+// each JetStream subscriber's stream, creates or looks up its consumer, and
+// starts pulling from it, returning the nats.go error unchanged when one
+// fails. A pull setting outside nats.go's limits fails here.
 //
 // A failure unsubscribes and stops the consumers opened so far, and leaves
 // the runtime and the client as they were.

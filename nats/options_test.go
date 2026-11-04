@@ -120,6 +120,44 @@ func TestNew_BadConsumerInactiveThreshold(t *testing.T) {
 	}
 }
 
+func TestNew_BadPullSetting(t *testing.T) {
+	bad := map[string]string{
+		PullMaxMessagesKey:       "0",
+		PullMaxBytesKey:          "lots",
+		PullThresholdMessagesKey: "-1",
+		PullExpiryKey:            "30",
+		PullHeartbeatKey:         "-5s",
+	}
+	for key, v := range bad {
+		t.Run(key, func(t *testing.T) {
+			err := newWithSubscriberMetadata(t, map[string]string{StreamKey: "S", key: v})
+			if !errors.Is(err, ErrBadConfig) {
+				t.Fatalf("want ErrBadConfig, got %v", err)
+			}
+		})
+	}
+}
+
+func TestNew_BadPullSettingConfig(t *testing.T) {
+	c := testClient(t, testConfig(startServer(t)))
+	cfg := testConfig("")
+	cfg[PullExpiryKey] = "soon"
+	if _, err := New(c, cfg, nil, nil); !errors.Is(err, ErrBadConfig) {
+		t.Fatalf("want ErrBadConfig, got %v", err)
+	}
+}
+
+// nats.go checks the range of a pull setting when Start consumes.
+func TestStart_PullSettingOutsideNatsLimits(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	md := map[string]string{StreamKey: "EVENTS", PullExpiryKey: "500ms"}
+	r := newRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, Metadata: md, Handler: okSubscriber}})
+	if err := r.Start(context.Background()); !errors.Is(err, jetstream.ErrInvalidOption) {
+		t.Fatalf("want jetstream.ErrInvalidOption, got %v", err)
+	}
+}
+
 func TestRequest_StreamOption(t *testing.T) {
 	c := testClient(t, testConfig(startServer(t)))
 	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, map[string]string{StreamKey: "S"})
@@ -142,6 +180,11 @@ func TestStart_SubscriberWithEveryOption(t *testing.T) {
 		MaxAckPendingKey:             "20",
 		DeliverPolicyKey:             "new",
 		ConsumerInactiveThresholdKey: "1h",
+		PullMaxMessagesKey:           "10",
+		PullMaxBytesKey:              "1048576",
+		PullThresholdMessagesKey:     "5",
+		PullExpiryKey:                "10s",
+		PullHeartbeatKey:             "2s",
 	}
 	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}})
 

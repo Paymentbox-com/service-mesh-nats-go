@@ -14,8 +14,8 @@ import (
 
 // Configuration keys this package reads from a mesh.Config. Every value is a
 // string. NewClient reads URLKey, NameKey, ConnectTimeoutKey, and
-// RequestTimeoutKey. New reads mesh.DeploymentGroupKey, ConcurrencyKey, and
-// MaxDeliverKey.
+// RequestTimeoutKey. New reads mesh.DeploymentGroupKey, ConcurrencyKey,
+// MaxDeliverKey, and the pull keys such as PullMaxMessagesKey.
 // Each constructor ignores the other's keys, so one Config can be given to
 // both.
 const (
@@ -54,7 +54,7 @@ const (
 // are its per-call options over its Target's Metadata, and an Endpoint's or
 // Subscriber's are its Metadata over its Target's Metadata. StreamKey is read
 // by Request, Publish, and New. The others are read from the settings of a
-// Subscriber that sets StreamKey, along with MaxDeliverKey.
+// Subscriber that sets StreamKey, along with MaxDeliverKey and the pull keys.
 const (
 	// StreamKey names a JetStream stream. On Publish it sends a JetStream
 	// publish that expects this stream and waits for its ack. On a
@@ -98,6 +98,42 @@ const (
 	// group, "5m" for a consumer group of mesh.ConsumerGroupNone with
 	// AckPolicyKey "none", and the server's default otherwise.
 	ConsumerInactiveThresholdKey = "consumer_inactive_threshold"
+)
+
+// Pull keys set how a JetStream subscriber pulls messages from its consumer.
+// They stay in the client and are never sent as consumer settings. Each is
+// read from a subscriber's settings, and in a Config it is the default for
+// subscribers that do not set it. Unset keys take nats.go's defaults. nats.go
+// checks the limits given below when Start begins pulling, and a value
+// outside them makes Start return its error.
+const (
+	// PullMaxMessagesKey is the most messages the subscriber asks for in one
+	// pull and holds in its buffer, as a positive integer. Default 500.
+	PullMaxMessagesKey = "pull_max_messages"
+
+	// PullMaxBytesKey is the most bytes the subscriber asks for in one pull
+	// and holds in its buffer, as a positive integer. Without
+	// PullMaxMessagesKey it replaces the message limit. With it, it caps the
+	// bytes of each batch. It must hold the largest message, or the
+	// subscriber stalls. Default none.
+	PullMaxBytesKey = "pull_max_bytes"
+
+	// PullThresholdMessagesKey is how few messages still owed from earlier
+	// pulls makes the subscriber pull again, as a positive integer. Default
+	// half of PullMaxMessagesKey.
+	PullThresholdMessagesKey = "pull_threshold_messages"
+
+	// PullExpiryKey is how long the server keeps a pull open while it has
+	// nothing to send, as a Go duration string of at least "1s". Default
+	// "30s".
+	PullExpiryKey = "pull_expiry"
+
+	// PullHeartbeatKey is how often the server signals an open pull that has
+	// nothing to send, as a Go duration string from "500ms" to "30s" and no
+	// more than half of PullExpiryKey. Two missed heartbeats make the
+	// subscriber pull again. Default half of PullExpiryKey, or "5s" for an
+	// ordered consumer.
+	PullHeartbeatKey = "pull_heartbeat"
 )
 
 const (
@@ -170,6 +206,7 @@ type runtimeSettings struct {
 	deploymentGroup string
 	concurrency     int
 	maxDeliver      int
+	pull            pullSettings
 	logger          *slog.Logger
 }
 
@@ -190,6 +227,9 @@ func parseRuntimeSettings(cfg mesh.Config, opts []Option) (runtimeSettings, erro
 		return runtimeSettings{}, err
 	}
 	if s.maxDeliver, err = positiveIntSetting(cfg, MaxDeliverKey, s.maxDeliver); err != nil {
+		return runtimeSettings{}, err
+	}
+	if s.pull, err = readPullSettings(cfg, pullSettings{}); err != nil {
 		return runtimeSettings{}, err
 	}
 	if s.logger == nil {

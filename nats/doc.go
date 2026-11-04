@@ -11,9 +11,9 @@
 //
 // A mesh.Config is parsed at construction. NewClient reads the connection
 // keys URLKey, NameKey, ConnectTimeoutKey, and RequestTimeoutKey. New reads
-// mesh.DeploymentGroupKey, which is required, ConcurrencyKey, and
-// MaxDeliverKey. Each
-// constructor ignores the other's keys, so one Config can be given to both.
+// mesh.DeploymentGroupKey, which is required, ConcurrencyKey, MaxDeliverKey,
+// and the pull keys such as PullMaxMessagesKey. Each constructor ignores the
+// other's keys, so one Config can be given to both.
 // A value that does not parse yields ErrBadConfig. A logger is passed to New
 // as WithLogger.
 //
@@ -41,9 +41,10 @@
 //
 // Each setting is read from the first of these that has it: the per-call
 // options of Request or Publish, the Endpoint's or Subscriber's Metadata,
-// the Target's Metadata, and this package's default. Endpoint and Subscriber
-// settings are read at construction. StreamKey and the other JetStream
-// options configure a JetStream subscriber.
+// the Target's Metadata, and this package's default. For MaxDeliverKey and
+// the pull keys, the runtime's Config comes before the default. Endpoint and
+// Subscriber settings are read at construction. StreamKey and the other
+// JetStream options configure a JetStream subscriber.
 //
 // # Delivery
 //
@@ -78,6 +79,7 @@
 //
 // Handlers run on their own goroutines, at most ConcurrencyKey at once across
 // all endpoints and subscribers. Beyond that, deliveries wait in nats.go's pending buffer.
+// A JetStream subscriber's buffer holds up to PullMaxMessagesKey messages.
 //
 // # Lifecycle
 //
