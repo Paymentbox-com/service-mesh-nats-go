@@ -29,7 +29,7 @@ func (r *Runtime) receive(c *jsConsumer, m jetstream.Msg) {
 		r.pending[d] = struct{}{}
 		r.pendingMu.Unlock()
 	}
-	if !r.dispatch(func() { r.serveJetStream(d) }) && c.acks {
+	if !r.dispatch(c.ctx, func() { r.serveJetStream(d) }) && c.acks {
 		r.abandon(d)
 	}
 }
@@ -42,7 +42,7 @@ func (r *Runtime) serveJetStream(d *delivery) {
 	}
 
 	in := mesh.Message{Target: b.target, Metadata: incomingMetadata(d.msg.Headers()), Payload: d.msg.Data()}
-	ctx := r.handlerCtx
+	ctx := c.ctx
 	meta, err := d.msg.Metadata()
 	if err != nil {
 		r.logger.Warn("nats: message has no JetStream metadata", "subject", b.subject, "error", err)

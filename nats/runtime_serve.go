@@ -11,19 +11,20 @@ import (
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
-// serve handles a message from a core subscription. arrival is when it
-// reached the callback.
-func (r *Runtime) serve(nc *natsio.Conn, b *subscription, m *natsio.Msg, arrival time.Time) {
+// serve handles a message from a core subscription. hctx is the handler
+// context of the Start that opened the subscription, and arrival is when the
+// message reached the callback.
+func (r *Runtime) serve(hctx context.Context, nc *natsio.Conn, b *subscription, m *natsio.Msg, arrival time.Time) {
 	in := mesh.Message{Target: b.target, Metadata: incomingMetadata(m.Header), Payload: m.Data}
 
 	if b.subscriber != nil {
-		if err := callSubscriber(r.handlerCtx, b.subscriber, in); err != nil {
+		if err := callSubscriber(hctx, b.subscriber, in); err != nil {
 			r.logger.Error("nats: subscriber handler failed", "subject", b.subject, "error", err)
 		}
 		return
 	}
 
-	ctx := r.handlerCtx
+	ctx := hctx
 	if v, ok := in.Metadata[mesh.TimeoutKey]; ok {
 		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= 0 {
 			deadline := arrival.Add(time.Duration(ms) * time.Millisecond)

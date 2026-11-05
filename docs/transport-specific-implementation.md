@@ -145,7 +145,10 @@ JetStream subscriber's consumer.
 
 `Start` on a closed client returns `ErrClosed`. A failure unsubscribes what
 was subscribed, stops the consumers started so far, and leaves the runtime
-and the client as they were.
+and the client as they were, so `Start` can be called again.
+
+Handlers that began before the failure keep running with a cancelled
+context. Their messages are still acked or nacked by their results.
 
 ### Stopping
 

@@ -65,6 +65,10 @@ type Runtime struct {
 	// *jsConsumer keys, so watchMissing can log them again.
 	missing sync.Map
 
+	// handlerCtx is the handler context of the latest Start, and
+	// cancelHandlers cancels it. Both are read and written only under mu.
+	// Each receiver keeps a copy of its Start's context, so a receiver left
+	// over from a failed Start never reads a later Start's.
 	handlerCtx     context.Context
 	cancelHandlers context.CancelFunc
 	sem            chan struct{}
@@ -153,7 +157,9 @@ func (r *Runtime) Running() bool {
 // fails. A pull setting outside nats.go's limits fails here.
 //
 // A failure unsubscribes and stops the consumers opened so far, and leaves
-// the runtime and the client as they were.
+// the runtime and the client as they were, so Start can be called again.
+// Handlers that began before the failure keep running with a cancelled
+// context, and their messages are still acked or nacked by their results.
 func (r *Runtime) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

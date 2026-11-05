@@ -83,6 +83,52 @@ func TestStart_MissingStream(t *testing.T) {
 	}
 }
 
+// A failed Start can leave handlers running from the consumers it opened
+// before the failure. A Start retried after the failure must not write
+// state that those handlers read without a lock. The test never
+// waits on those handlers, so the race detector sees any such access as
+// unordered. A handler starts during the failed Start in roughly 40% of
+// tries, so the test tries 10 times.
+func TestStart_RetryAfterFailureDoesNotRaceEarlierHandlers(t *testing.T) {
+	url := startServer(t)
+	pub := testClient(t, testConfig(url))
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "8"
+
+	for i := range 10 {
+		events := mesh.Target{Segments: []string{"test", "event", fmt.Sprint(i)}, Kind: mesh.KindTopic}
+		other := mesh.Target{Segments: []string{"test", "other", fmt.Sprint(i)}, Kind: mesh.KindTopic}
+		eventsStream, otherStream := fmt.Sprintf("EVENTS%d", i), fmt.Sprintf("OTHER%d", i)
+		createStream(t, url, eventsStream, fmt.Sprintf("test.event.%d", i))
+		for range 50 {
+			if err := pub.Publish(context.Background(), mesh.Message{Target: events}, map[string]string{StreamKey: eventsStream}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		release := make(chan struct{})
+		block := func(context.Context, mesh.Message) error { <-release; return nil }
+		r := newRuntime(t, cfg, nil, []mesh.Subscriber{
+			{Target: events, Metadata: map[string]string{StreamKey: eventsStream}, Handler: block},
+			{Target: other, Metadata: map[string]string{StreamKey: otherStream}, Handler: okSubscriber},
+		}, WithLogger(quietLogger()))
+
+		if err := r.Start(context.Background()); !errors.Is(err, jetstream.ErrStreamNotFound) {
+			t.Fatalf("want jetstream.ErrStreamNotFound, got %v", err)
+		}
+		createStream(t, url, otherStream, fmt.Sprintf("test.other.%d", i))
+		if err := r.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), testWait)
+		if err := r.Stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+	}
+}
+
 func TestStart_NamedGroupConsumerCreatedThenUpdated(t *testing.T) {
 	url := startServer(t)
 	stream := createStream(t, url, "EVENTS", "test.event")

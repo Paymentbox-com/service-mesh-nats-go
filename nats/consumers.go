@@ -19,10 +19,12 @@ var lateStartLogInterval = time.Minute
 var missingLogInterval = 5 * time.Second
 
 // jsConsumer is a JetStream subscriber's consumer once Start has created or
-// found it. acks, ackWait, backoff, and maxDeliver come from the server's
-// settings for the consumer. A maxDeliver of -1 means no limit.
+// found it. ctx is the handler context of that Start, which its handlers get.
+// acks, ackWait, backoff, and maxDeliver come from the server's settings for
+// the consumer. A maxDeliver of -1 means no limit.
 type jsConsumer struct {
 	sub        *subscription
+	ctx        context.Context
 	consumer   jetstream.Consumer
 	cc         jetstream.ConsumeContext
 	acks       bool
@@ -105,12 +107,14 @@ func (c *jsConsumer) deadline(arrival time.Time, delivered uint64) time.Time {
 // consume opens a JetStream subscriber's consumer and starts consuming it
 // with the subscriber's pull settings. From then on nats.go pulls messages
 // in batches and hands each one to receive, which can happen before consume
-// returns.
+// returns. It must run under r.mu, because it copies r.handlerCtx into the
+// consumer so its handlers never read r.handlerCtx themselves.
 func (r *Runtime) consume(ctx context.Context, js jetstream.JetStream, b *subscription) (*jsConsumer, error) {
 	c, err := openConsumer(ctx, js, b)
 	if err != nil {
 		return nil, err
 	}
+	c.ctx = r.handlerCtx
 	opts := append(b.js.pull.consumeOpts(), jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
 		r.consumeError(c, err)
 	}))

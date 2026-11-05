@@ -9,8 +9,8 @@ import (
 )
 
 // openReceivers runs the boot check, then subscribes each core endpoint and
-// subscriber and consumes each JetStream subscriber. On failure it returns
-// what it opened so far with the error.
+// subscriber and consumes each JetStream subscriber. It runs inside Start,
+// under r.mu. On failure it returns what it opened so far with the error.
 func (r *Runtime) openReceivers(ctx context.Context, nc *natsio.Conn, js jetstream.JetStream) ([]*natsio.Subscription, []*jsConsumer, error) {
 	if err := checkEndpointStreams(ctx, js, r.subscriptions); err != nil {
 		return nil, nil, err
@@ -38,10 +38,13 @@ func (r *Runtime) openReceivers(ctx context.Context, nc *natsio.Conn, js jetstre
 }
 
 // subscribe makes a core subscription for b, plain or in its queue group.
+// It must run under r.mu. Its handlers get the handler context of the Start
+// that calls it, copied here so they never read r.handlerCtx themselves.
 func (r *Runtime) subscribe(nc *natsio.Conn, b *subscription) (*natsio.Subscription, error) {
+	hctx := r.handlerCtx
 	cb := func(m *natsio.Msg) {
 		arrival := time.Now()
-		r.dispatch(func() { r.serve(nc, b, m, arrival) })
+		r.dispatch(hctx, func() { r.serve(hctx, nc, b, m, arrival) })
 	}
 	if b.queue == "" {
 		return nc.Subscribe(b.subject, cb)
