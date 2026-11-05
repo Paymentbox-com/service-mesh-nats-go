@@ -408,6 +408,9 @@ func TestConsume_FailureOnLastDeliveryLogged(t *testing.T) {
 		rec["message_id"].String() != "id-1" {
 		t.Fatalf("log record %v", rec)
 	}
+	if level := logs.levels("nats: message will not be delivered again")[0]; level != slog.LevelError {
+		t.Fatalf("logged at %v, want ERROR", level)
+	}
 }
 
 func TestConsume_FailureBeforeLastDeliveryNotLoggedAsFinal(t *testing.T) {
@@ -510,6 +513,55 @@ func TestConsume_LateStartLogged(t *testing.T) {
 		rec["late_by"].Duration() <= 0 ||
 		rec["skipped"].Int64() != 0 {
 		t.Fatalf("log record %v", rec)
+	}
+	if level := logs.levels("nats: handler started after its ack deadline")[0]; level != slog.LevelWarn {
+		t.Fatalf("logged at %v, want WARN", level)
+	}
+}
+
+// The late delivery is the second attempt of the consumer's second message,
+// on a consumer that skipped the stream's first two messages, so its stream
+// sequence, consumer sequence, and delivery attempt all differ.
+func TestConsume_LateRedeliveryLogged(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	publishEvents(t, url, 2)
+	logs := &logRecords{}
+	var bCalls atomic.Int32
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "1"
+	md := map[string]string{StreamKey: "EVENTS", DeliverPolicyKey: "new", AckWaitKey: "200ms", MaxDeliverKey: "2"}
+	startRuntime(t, cfg, nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		if string(m.Payload) != "b" {
+			return nil
+		}
+		if bCalls.Add(1) == 1 {
+			// Holds the only handler slot past the ack wait, so the server
+			// sends b again and that delivery waits past its deadline.
+			time.Sleep(500 * time.Millisecond)
+			return errors.New("boom")
+		}
+		return nil
+	}}}, WithLogger(slog.New(logs)))
+
+	c := testClient(t, testConfig(url))
+	for _, payload := range []string{"a", "b"} {
+		if err := c.Publish(context.Background(), mesh.Message{Target: eventTarget, Payload: []byte(payload)}, map[string]string{StreamKey: "EVENTS"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { return len(logs.withMessage("nats: handler started after its ack deadline")) > 0 })
+	time.Sleep(300 * time.Millisecond) // give an unwanted extra record time to show up
+	recs := logs.withMessage("nats: handler started after its ack deadline")
+	if len(recs) != 1 {
+		t.Fatalf("%d late start records, want 1", len(recs))
+	}
+	rec := recs[0]
+	if rec["stream_sequence"].Uint64() != 4 || rec["delivery_attempt"].Uint64() != 2 {
+		t.Fatalf("log record %v, want stream_sequence 4 and delivery_attempt 2", rec)
+	}
+	if id, ok := rec["message_id"]; ok {
+		t.Fatalf("message_id %q on a message without one", id)
 	}
 }
 

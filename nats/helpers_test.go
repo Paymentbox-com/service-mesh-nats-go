@@ -192,3 +192,16 @@ func (l *logRecords) withMessage(msg string) []map[string]slog.Value {
 	}
 	return out
 }
+
+// levels returns the level of every record whose message is msg.
+func (l *logRecords) levels(msg string) []slog.Level {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []slog.Level
+	for _, r := range l.records {
+		if r.Message == msg {
+			out = append(out, r.Level)
+		}
+	}
+	return out
+}

@@ -462,6 +462,62 @@
    "expect": "killed"
   },
   {
+   "id": "failed-attempt-dropped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\t\t\tattrs = append(attrs, \"delivery_attempt\", meta.NumDelivered)\n",
+   "new": "",
+   "intent": "nats: subscriber handler failed loses delivery_attempt.",
+   "expect": "killed"
+  },
+  {
+   "id": "final-consumer-swapped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\t\t\"consumer\", meta.Consumer,\n\t\t\"stream_sequence\", meta.Sequence.Stream,\n\t\t\"delivery_attempt\", meta.NumDelivered,\n\t\t\"max_deliver\"",
+   "new": "\t\t\"consumer\", b.js.stream,\n\t\t\"stream_sequence\", meta.Sequence.Stream,\n\t\t\"delivery_attempt\", meta.NumDelivered,\n\t\t\"max_deliver\"",
+   "intent": "The final-failure error names the stream as the consumer.",
+   "expect": "killed"
+  },
+  {
+   "id": "final-every-failure",
+   "path": "nats/runtime_jetstream.go",
+   "old": "if meta != nil && c.lastDelivery(meta.NumDelivered) {",
+   "new": "if meta != nil {",
+   "intent": "Every JetStream handler failure is reported as final.",
+   "expect": "killed"
+  },
+  {
+   "id": "final-level",
+   "path": "nats/runtime_jetstream.go",
+   "old": "r.logger.Error(\"nats: message will not be delivered again\"",
+   "new": "r.logger.Warn(\"nats: message will not be delivered again\"",
+   "intent": "The final-failure message is logged at Warn instead of Error.",
+   "expect": "killed"
+  },
+  {
+   "id": "final-max-deliver-dropped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\t\t\"max_deliver\", c.maxDeliver,\n",
+   "new": "",
+   "intent": "The final-failure error loses max_deliver.",
+   "expect": "killed"
+  },
+  {
+   "id": "final-message-id-dropped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "r.logFinalFailure(c, meta, in.Metadata[mesh.MessageIDKey])",
+   "new": "r.logFinalFailure(c, meta, \"\")",
+   "intent": "The final-failure error never carries message_id.",
+   "expect": "killed"
+  },
+  {
+   "id": "final-sequence-swapped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\t\t\"stream_sequence\", meta.Sequence.Stream,\n\t\t\"delivery_attempt\", meta.NumDelivered,\n\t\t\"max_deliver\"",
+   "new": "\t\t\"stream_sequence\", meta.Sequence.Consumer,\n\t\t\"delivery_attempt\", meta.NumDelivered,\n\t\t\"max_deliver\"",
+   "intent": "The final-failure error reports the consumer sequence as the stream sequence.",
+   "expect": "killed"
+  },
+  {
    "id": "flush-deadline-fallback",
    "path": "nats/runtime.go",
    "old": "\tif _, hasDeadline := ctx.Deadline(); !hasDeadline {\n\t\tvar cancel context.CancelFunc\n\t\tctx, cancel = context.WithTimeout(ctx, fallback)\n\t\tdefer cancel()\n\t}\n\treturn nc.FlushWithContext(ctx)",
@@ -533,6 +589,143 @@
    "old": "\t\t\tctx, cancel = context.WithDeadline(ctx, deadline)\n",
    "new": "\t\t\t_, cancel = context.WithDeadline(ctx, deadline)\n",
    "intent": "A JetStream handler's context no longer carries the ack deadline.",
+   "expect": "killed"
+  },
+  {
+   "id": "last-delivery-off-by-one",
+   "path": "nats/runtime_jetstream.go",
+   "old": "return delivered >= uint64(c.maxDeliver)",
+   "new": "return delivered > uint64(c.maxDeliver)",
+   "intent": "The failure on the last delivery is not reported as final.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-attempt-swapped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\t\t\"delivery_attempt\", meta.NumDelivered,\n\t}\n\tif messageID",
+   "new": "\t\t\"delivery_attempt\", meta.Sequence.Consumer,\n\t}\n\tif messageID",
+   "intent": "The late-start warning reports the consumer sequence as the delivery attempt.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-by-sign",
+   "path": "nats/runtime_jetstream.go",
+   "old": "now, now.Sub(deadline))",
+   "new": "now, deadline.Sub(now))",
+   "intent": "late_by is negative.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-compare-inverted",
+   "path": "nats/runtime_jetstream.go",
+   "old": "now.After(deadline)",
+   "new": "now.Before(deadline)",
+   "intent": "Handlers that start on time are warned about, and late ones are not.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-interval-default",
+   "path": "nats/jetstream.go",
+   "old": "var lateStartLogInterval = time.Minute",
+   "new": "var lateStartLogInterval = time.Millisecond",
+   "intent": "The default limit becomes a millisecond, so late-start warnings are effectively unlimited.",
+   "expect": "survives",
+   "reason": "The one-minute default is a tuning value. A test would have to wait a minute or read the variable back."
+  },
+  {
+   "id": "late-last-not-set",
+   "path": "nats/jetstream.go",
+   "old": "c.lastLateLog, c.lateSkipped = now, 0",
+   "new": "c.lateSkipped = 0",
+   "intent": "The interval never starts, so every late start is logged.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-level",
+   "path": "nats/runtime_jetstream.go",
+   "old": "r.logger.Warn(\"nats: handler started after its ack deadline\"",
+   "new": "r.logger.Info(\"nats: handler started after its ack deadline\"",
+   "intent": "The late-start warning is logged at Info instead of Warn.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-message-id-always",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\tif messageID != \"\" {\n\t\tattrs = append(attrs, \"message_id\", messageID)\n\t}\n\tattrs = append(attrs, \"late_by\"",
+   "new": "\tif true {\n\t\tattrs = append(attrs, \"message_id\", messageID)\n\t}\n\tattrs = append(attrs, \"late_by\"",
+   "intent": "The late-start warning carries an empty message_id when the message has none.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-message-id-dropped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "r.logLateStart(c, meta, in.Metadata[mesh.MessageIDKey],",
+   "new": "r.logLateStart(c, meta, \"\",",
+   "intent": "The late-start warning never carries message_id.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-never-logged",
+   "path": "nats/jetstream.go",
+   "old": "\treturn skipped, true\n}",
+   "new": "\treturn skipped, false\n}",
+   "intent": "No late-start warning is ever logged.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-not-limited",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\tif !logged {\n\t\treturn",
+   "new": "\tif false && !logged {\n\t\treturn",
+   "intent": "Every late start is logged, ignoring the interval.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-sequence-swapped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\t\t\"stream_sequence\", meta.Sequence.Stream,\n\t\t\"delivery_attempt\", meta.NumDelivered,\n\t}",
+   "new": "\t\t\"stream_sequence\", meta.Sequence.Consumer,\n\t\t\"delivery_attempt\", meta.NumDelivered,\n\t}",
+   "intent": "The late-start warning reports the consumer sequence as the stream sequence.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-skipped-dropped",
+   "path": "nats/runtime_jetstream.go",
+   "old": "\"late_by\", lateBy, \"skipped\", skipped)",
+   "new": "\"late_by\", lateBy, \"skipped\", skipped*0)",
+   "intent": "The late-start warning always reports skipped 0.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-skipped-not-counted",
+   "path": "nats/jetstream.go",
+   "old": "\t\tc.lateSkipped++\n",
+   "new": "",
+   "intent": "Late starts within the interval are not counted, so skipped is always 0.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-skipped-not-reset",
+   "path": "nats/jetstream.go",
+   "old": "c.lastLateLog, c.lateSkipped = now, 0",
+   "new": "c.lastLateLog = now",
+   "intent": "skipped keeps counting across warnings, so later warnings over-report.",
+   "expect": "killed"
+  },
+  {
+   "id": "late-skipped-not-returned",
+   "path": "nats/jetstream.go",
+   "old": "\tskipped = c.lateSkipped\n",
+   "new": "",
+   "intent": "The warning after the interval reports skipped 0 even when starts were skipped.",
+   "expect": "killed"
+  },
+  {
+   "id": "maxdeliver-not-read",
+   "path": "nats/jetstream.go",
+   "old": "\tc.maxDeliver = cfg.MaxDeliver\n",
+   "new": "",
+   "intent": "maxDeliver stays 0, so every handler failure is reported as final.",
    "expect": "killed"
   },
   {
