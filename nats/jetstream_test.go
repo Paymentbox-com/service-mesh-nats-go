@@ -690,6 +690,9 @@ func TestConsume_DeletedConsumerLogged(t *testing.T) {
 	if level := logs.levels("nats: consumer missing")[0]; level != slog.LevelError {
 		t.Fatalf("logged at %v, want ERROR", level)
 	}
+	if recs := logs.withMessage("nats: consume error"); len(recs) != 0 {
+		t.Fatalf("missing consumer also logged as a consume error: %v", recs)
+	}
 }
 
 // A consumer deleted while the client is disconnected gets no 409 from the
@@ -725,7 +728,7 @@ func startServerHandle(t *testing.T) *server.Server {
 // "audit" on stream EVENTS, pulling with a 1s heartbeat, and then deletes
 // the group's consumer. With disconnect, the server drops the runtime's
 // connection before the delete, so the runtime sees no 409.
-func startRuntimeAudit(t *testing.T, ns *server.Server, stream jetstream.Stream, logger *slog.Logger, h mesh.SubscriberHandler, disconnect bool) {
+func startRuntimeAudit(t *testing.T, ns *server.Server, stream jetstream.Stream, logger *slog.Logger, h mesh.SubscriberHandler, disconnect bool) *Runtime {
 	t.Helper()
 	cfg := testConfig(ns.ClientURL())
 	cfg[PullExpiryKey] = "2s"
@@ -744,6 +747,7 @@ func startRuntimeAudit(t *testing.T, ns *server.Server, stream jetstream.Stream,
 	if err := stream.DeleteConsumer(context.Background(), "audit"); err != nil {
 		t.Fatal(err)
 	}
+	return r
 }
 
 // shortMissingLogInterval sets missingLogInterval to 100ms for one test.
@@ -783,6 +787,44 @@ func TestConsume_MissingConsumerLoggedAgain(t *testing.T) {
 	}
 	if _, ok := rec["error"]; ok {
 		t.Fatalf("repeated record has an error: %v", rec)
+	}
+}
+
+// nats.go logs each failed pull only every two heartbeats. The records
+// without an error come from the runtime's own lookup, which repeats sooner.
+func TestConsume_PulledConsumerLoggedAgain(t *testing.T) {
+	shortMissingLogInterval(t)
+	ns := startServerHandle(t)
+	stream := createStream(t, ns.ClientURL(), "EVENTS", "test.event")
+	logs := &logRecords{}
+	startRuntimeAudit(t, ns, stream, slog.New(logs), okSubscriber, true)
+
+	waitFor(t, func() bool {
+		for _, rec := range logs.withMessage("nats: consumer missing") {
+			if _, ok := rec["error"]; !ok {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestConsume_MissingConsumerNotLoggedAfterStop(t *testing.T) {
+	shortMissingLogInterval(t)
+	ns := startServerHandle(t)
+	stream := createStream(t, ns.ClientURL(), "EVENTS", "test.event")
+	logs := &logRecords{}
+	r := startRuntimeAudit(t, ns, stream, slog.New(logs), okSubscriber, false)
+	waitFor(t, func() bool { return len(logs.withMessage("nats: consumer missing")) > 0 })
+
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+	if err := r.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	n := missingCountSettles(logs)
+	if m := missingCountSettles(logs); m != n {
+		t.Fatalf("%d records, then %d after Stop, want no more", n, m)
 	}
 }
 

@@ -292,11 +292,53 @@
    "expect": "killed"
   },
   {
+   "id": "check-closed-ignored",
+   "path": "nats/consumers.go",
+   "old": "\tcase <-c.cc.Closed():\n\t\tr.logMissing(c)\n",
+   "new": "\tcase <-make(chan struct{}):\n\t\tr.logMissing(c)\n",
+   "intent": "A consumer nats.go stopped pulling from is dropped once it exists again, though nothing pulls from it.",
+   "expect": "killed"
+  },
+  {
+   "id": "check-connected-inverted",
+   "path": "nats/consumers.go",
+   "old": "err != nil || !nc.IsConnected() {",
+   "new": "err != nil || nc.IsConnected() {",
+   "intent": "A missing consumer nats.go still pulls from is never looked up or logged again while connected.",
+   "expect": "killed"
+  },
+  {
+   "id": "check-found-kept",
+   "path": "nats/consumers.go",
+   "old": "\tcase err == nil:\n\t\tr.missing.Delete(c)\n",
+   "new": "\tcase err == nil:\n",
+   "intent": "A consumer that is back stays in the set and is looked up every interval.",
+   "expect": "survives",
+   "reason": "A consumer found again is not logged either way. Removing it from the set only saves a lookup every interval."
+  },
+  {
    "id": "check-kind-cond",
    "path": "nats/target.go",
    "old": "if t.Kind != want {",
    "new": "if t.Kind == want {",
    "intent": "Every correctly kinded call fails with ErrKindMismatch, and wrong kinds pass.",
+   "expect": "killed"
+  },
+  {
+   "id": "check-lookup-error-not-logged",
+   "path": "nats/consumers.go",
+   "old": "\tdefault:\n\t\tr.logMissing(c, \"error\", err)\n\t}\n}",
+   "new": "\tdefault:\n\t}\n}",
+   "intent": "A failed lookup of a missing consumer is not logged.",
+   "expect": "survives",
+   "reason": "Needs a JetStream API failure other than not found while connected, which the tests cannot produce."
+  },
+  {
+   "id": "check-notfound-not-logged",
+   "path": "nats/consumers.go",
+   "old": "\tcase errors.Is(err, jetstream.ErrConsumerNotFound):\n\t\tr.logMissing(c)\n",
+   "new": "\tcase errors.Is(err, jetstream.ErrConsumerNotFound):\n",
+   "intent": "A consumer nats.go still pulls from and the server cannot find is not logged again.",
    "expect": "killed"
   },
   {
@@ -777,6 +819,79 @@
    "expect": "killed"
   },
   {
+   "id": "missing-also-warned",
+   "path": "nats/consumers.go",
+   "old": "\t\tr.logMissing(c, \"error\", err)\n\t\treturn\n\t}\n",
+   "new": "\t\tr.logMissing(c, \"error\", err)\n\t}\n",
+   "intent": "A missing consumer is also logged as a consume error warning.",
+   "expect": "killed"
+  },
+  {
+   "id": "missing-consumer-name",
+   "path": "nats/consumers.go",
+   "old": "\"consumer\", c.consumer.CachedInfo().Name}, attrs...)",
+   "new": "\"consumer\", b.js.stream}, attrs...)",
+   "intent": "The missing-consumer record names the stream as the consumer.",
+   "expect": "killed"
+  },
+  {
+   "id": "missing-deleted-not-matched",
+   "path": "nats/consumers.go",
+   "old": "(errors.Is(err, jetstream.ErrConsumerDeleted) || errors.Is(err, natsio.ErrNoResponders))",
+   "new": "(errors.Is(err, natsio.ErrNoResponders))",
+   "intent": "A consumer deleted while connected is only warned about as a consume error.",
+   "expect": "killed"
+  },
+  {
+   "id": "missing-first-no-error",
+   "path": "nats/consumers.go",
+   "old": "\t\tr.logMissing(c, \"error\", err)\n\t\treturn\n",
+   "new": "\t\tr.logMissing(c)\n\t\treturn\n",
+   "intent": "The first missing-consumer record loses nats.go's error.",
+   "expect": "killed"
+  },
+  {
+   "id": "missing-first-not-logged",
+   "path": "nats/consumers.go",
+   "old": "\t\tr.missing.Store(c, struct{}{})\n\t\tr.logMissing(c, \"error\", err)\n",
+   "new": "\t\tr.missing.Store(c, struct{}{})\n",
+   "intent": "The first report of a missing consumer, with nats.go's error, is not logged.",
+   "expect": "killed"
+  },
+  {
+   "id": "missing-interval-default",
+   "path": "nats/consumers.go",
+   "old": "var missingLogInterval = 5 * time.Second",
+   "new": "var missingLogInterval = time.Minute",
+   "intent": "A missing consumer is logged again only once a minute.",
+   "expect": "survives",
+   "reason": "The 5 second default is a tuning value. A test would have to wait 5 seconds or read the variable back."
+  },
+  {
+   "id": "missing-level",
+   "path": "nats/consumers.go",
+   "old": "\tr.logger.Error(\"nats: consumer missing\", attrs...)",
+   "new": "\tr.logger.Warn(\"nats: consumer missing\", attrs...)",
+   "intent": "A missing consumer is logged at Warn.",
+   "expect": "killed"
+  },
+  {
+   "id": "missing-noresponders-not-matched",
+   "path": "nats/consumers.go",
+   "old": "errors.Is(err, natsio.ErrNoResponders)) {",
+   "new": "errors.Is(err, natsio.ErrNoServers)) {",
+   "intent": "A consumer deleted while disconnected is only warned about as a consume error.",
+   "expect": "killed"
+  },
+  {
+   "id": "missing-not-stored",
+   "path": "nats/consumers.go",
+   "old": "\t\tr.missing.Store(c, struct{}{})\n",
+   "new": "",
+   "intent": "A missing consumer is logged once and never again.",
+   "expect": "killed"
+  },
+  {
    "id": "nak-delay-cond",
    "path": "nats/runtime_jetstream.go",
    "old": "nakDelay; delay > 0 {",
@@ -1232,6 +1347,30 @@
    "old": "\tattrs = append(attrs, \"handler_running\", running)\n",
    "new": "\t_ = running\n",
    "intent": "The drain-end warning has no handler_running attribute.",
+   "expect": "killed"
+  },
+  {
+   "id": "watch-ignores-stop",
+   "path": "nats/consumers.go",
+   "old": "\t\tcase <-ctx.Done():\n\t\t\treturn\n\t\tcase <-t.C:",
+   "new": "\t\tcase <-make(chan struct{}):\n\t\t\treturn\n\t\tcase <-t.C:",
+   "intent": "The watcher keeps running and logging after Stop.",
+   "expect": "killed"
+  },
+  {
+   "id": "watch-never-checks",
+   "path": "nats/consumers.go",
+   "old": "\t\t\t\tr.checkMissing(ctx, k.(*jsConsumer))\n",
+   "new": "\t\t\t\t_ = k\n",
+   "intent": "A missing consumer is never logged again.",
+   "expect": "killed"
+  },
+  {
+   "id": "watcher-not-started",
+   "path": "nats/runtime.go",
+   "old": "\t\tgo r.watchMissing(r.handlerCtx)\n",
+   "new": "",
+   "intent": "A missing consumer is never logged again after the first report.",
    "expect": "killed"
   }
  ]
