@@ -440,7 +440,7 @@
   {
    "id": "dispatch-ctx-case",
    "path": "nats/runtime_dispatch.go",
-   "old": "\tcase <-r.handlerCtx.Done():\n\t\treturn false\n\t}\n\n\t// Checked again",
+   "old": "\tcase <-ctx.Done():\n\t\treturn false\n\t}\n\n\t// Checked again",
    "new": "\t}\n\n\t// Checked again",
    "intent": "A message waiting for a handler slot keeps waiting after Stop cancels the handlers.",
    "expect": "killed"
@@ -448,8 +448,8 @@
   {
    "id": "dispatch-fast-check",
    "path": "nats/runtime_dispatch.go",
-   "old": "\tif !r.isAccepting() {\n\t\treturn false\n\t}\n\tselect {",
-   "new": "\tselect {",
+   "old": "\tif !r.isAccepting() || ctx.Err() != nil {\n\t\treturn false\n\t}\n\tselect {",
+   "new": "\tif ctx.Err() != nil {\n\t\treturn false\n\t}\n\tselect {",
    "intent": "A message arriving after intake closed waits for a handler slot before it is turned away.",
    "expect": "survives",
    "reason": "Fast path: without it, a message arriving after intake closed waits for a handler slot and is then turned away by the locked check. Same outcome, only later."
@@ -457,8 +457,8 @@
   {
    "id": "dispatch-locked-check",
    "path": "nats/runtime_dispatch.go",
-   "old": "\tr.acceptMu.RLock()\n\tif !r.accepting {\n\t\tr.acceptMu.RUnlock()\n\t\t<-r.sem\n\t\treturn false\n\t}\n",
-   "new": "\tr.acceptMu.RLock()\n",
+   "old": "\tr.acceptMu.RLock()\n\tif !r.accepting || ctx.Err() != nil {",
+   "new": "\tr.acceptMu.RLock()\n\tif ctx.Err() != nil {",
    "intent": "A message that got a handler slot after intake closed still starts a handler.",
    "expect": "survives",
    "reason": "Race guard: keeps wg.Add from racing Stop's wg.Wait. Stop closes intake only after every subscription and consumer has drained, so no test can reach the window."
@@ -1046,8 +1046,8 @@
   {
    "id": "receive-abandon",
    "path": "nats/runtime_jetstream.go",
-   "old": "\tif !r.dispatch(func() { r.serveJetStream(d) }) && c.acks {\n\t\tr.abandon(d)\n\t}\n",
-   "new": "\tr.dispatch(func() { r.serveJetStream(d) })\n",
+   "old": "\tif !r.dispatch(c.ctx, func() { r.serveJetStream(d) }) && c.acks {\n\t\tr.abandon(d)\n\t}\n",
+   "new": "\tr.dispatch(c.ctx, func() { r.serveJetStream(d) })\n",
    "intent": "A message that arrives after Stop closed intake is left unsettled instead of nacked and logged.",
    "expect": "killed"
   },
@@ -1198,8 +1198,8 @@
   {
    "id": "serve-subscriber-log",
    "path": "nats/runtime_serve.go",
-   "old": "\t\tif err := callSubscriber(r.handlerCtx, b.subscriber, in); err != nil {\n\t\t\tr.logger.Error(\"nats: subscriber handler failed\", \"subject\", b.subject, \"error\", err)\n\t\t}\n",
-   "new": "\t\t_ = callSubscriber(r.handlerCtx, b.subscriber, in)\n",
+   "old": "\t\tif err := callSubscriber(hctx, b.subscriber, in); err != nil {\n\t\t\tr.logger.Error(\"nats: subscriber handler failed\", \"subject\", b.subject, \"error\", err)\n\t\t}\n",
+   "new": "\t\t_ = callSubscriber(hctx, b.subscriber, in)\n",
    "intent": "A failing core subscriber handler is no longer logged.",
    "expect": "killed"
   },
@@ -1232,8 +1232,8 @@
   {
    "id": "start-consumers",
    "path": "nats/runtime.go",
-   "old": "\tr.consumers = consumers\n\tr.state = stateRunning",
-   "new": "\tr.state = stateRunning",
+   "old": "\tr.consumers = consumers\n\tif len(consumers) > 0 {",
+   "new": "\tif len(consumers) > 0 {",
    "intent": "Stop does not drain the JetStream consumers, and Receiver.Consumer returns nil.",
    "expect": "killed"
   },
@@ -1256,8 +1256,8 @@
   {
    "id": "start-subs",
    "path": "nats/runtime.go",
-   "old": "\tr.subs = subs\n\tr.consumers = consumers\n\tr.state = stateRunning",
-   "new": "\tr.consumers = consumers\n\tr.state = stateRunning",
+   "old": "\tr.subs = subs\n\tr.consumers = consumers\n",
+   "new": "\tr.consumers = consumers\n",
    "intent": "Stop does not drain the core subscriptions, so waiting requests are dropped.",
    "expect": "killed"
   },
