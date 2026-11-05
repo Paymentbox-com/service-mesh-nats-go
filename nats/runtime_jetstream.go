@@ -9,25 +9,6 @@ import (
 	"github.com/Paymentbox-com/service-mesh-go/mesh"
 )
 
-// consume opens a JetStream subscriber's consumer and starts consuming it
-// with the subscriber's pull settings. From then on nats.go pulls messages
-// in batches and hands each one to receive, which can happen before consume
-// returns.
-func (r *Runtime) consume(ctx context.Context, js jetstream.JetStream, b *subscription) (*jsConsumer, error) {
-	c, err := openConsumer(ctx, js, b)
-	if err != nil {
-		return nil, err
-	}
-	opts := append(b.js.pull.consumeOpts(), jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
-		r.logger.Warn("nats: consume error", "subject", b.subject, "stream", b.js.stream, "error", err)
-	}))
-	c.cc, err = c.consumer.Consume(func(m jetstream.Msg) { r.receive(c, m) }, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
 // abandonDrain closes intake, naks every message not yet settled, and waits
 // for messages still buffered in the consumers to reach the callbacks, which
 // nak them too.
@@ -35,19 +16,6 @@ func (r *Runtime) abandonDrain(consumers []*jsConsumer) {
 	r.setAccepting(false)
 	r.abandonPending()
 	waitConsumersClosed(consumers, flushBudget)
-}
-
-// waitConsumersClosed waits until every consumer has stopped delivering, or
-// budget passes.
-func waitConsumersClosed(consumers []*jsConsumer, budget time.Duration) {
-	timeout := time.After(budget)
-	for _, c := range consumers {
-		select {
-		case <-c.cc.Closed():
-		case <-timeout:
-			return
-		}
-	}
 }
 
 // receive is the Consume callback of a JetStream consumer.
@@ -155,13 +123,6 @@ func (r *Runtime) logLateStart(c *jsConsumer, meta *jetstream.MsgMetadata, messa
 	}
 	attrs = append(attrs, "late_by", lateBy, "skipped", skipped)
 	r.logger.Warn("nats: handler started after its ack deadline", attrs...)
-}
-
-// lastDelivery reports whether delivery number delivered is the last one the
-// server sends. A maxDeliver of -1 converts to the largest uint64, so no
-// delivery is the last.
-func (c *jsConsumer) lastDelivery(delivered uint64) bool {
-	return delivered >= uint64(c.maxDeliver)
 }
 
 // logFinalFailure logs a message whose handler failed on its last delivery.

@@ -316,6 +316,33 @@ group, and fails with the nats.go error when it does not exist. It reads the
 consumer's settings from the server and ignores the subscriber's consumer
 settings.
 
+## A Missing Consumer
+
+A consumer can disappear while the runtime runs. The server deletes an
+acking `none` consumer after 5 seconds without pulls, so a disconnect longer
+than that loses it. A consumer is also lost when someone deletes it or its
+stream, or with the cluster node that held it when it has one replica.
+
+The runtime does not create a missing consumer again. It logs
+`nats: consumer missing` at Error when nats.go reports the consumer gone,
+and again every 5 seconds while the subscriber still receives nothing from
+it. An ordered consumer is not logged, because nats.go creates it again by
+itself.
+
+What follows depends on whether the connection was up when the consumer was
+deleted:
+
+- Deleted while connected, the server tells nats.go, and nats.go stops
+  pulling. The subscriber receives nothing until the next `Start`, even when
+  the consumer is created again.
+- Deleted while disconnected, nats.go keeps pulling after it reconnects, and
+  each pull gets no responders. When a consumer with the same name is created
+  again, by another instance's `Start` or outside the runtime, the next pull
+  gets messages and the log stops.
+
+The server names an acking `none` consumer, so nothing creates it again, and
+its subscriber receives nothing until the next `Start`.
+
 ## Inspecting Streams and Consumers
 
 The client and the runtime give access to JetStream state outside a handler.

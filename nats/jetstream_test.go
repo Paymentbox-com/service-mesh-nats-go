@@ -669,6 +669,187 @@ func TestConsume_LateStartWithoutAcksNotLogged(t *testing.T) {
 	}
 }
 
+func TestConsume_DeletedConsumerLogged(t *testing.T) {
+	url := startServer(t)
+	stream := createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	md := map[string]string{StreamKey: "EVENTS"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}}, WithLogger(slog.New(logs)))
+
+	if err := stream.DeleteConsumer(context.Background(), "audit"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(logs.withMessage("nats: consumer missing")) > 0 })
+	rec := logs.withMessage("nats: consumer missing")[0]
+	if rec["subject"].String() != "test.event" ||
+		rec["stream"].String() != "EVENTS" ||
+		rec["consumer"].String() != "audit" ||
+		!errors.Is(rec["error"].Any().(error), jetstream.ErrConsumerDeleted) {
+		t.Fatalf("log record %v", rec)
+	}
+	if level := logs.levels("nats: consumer missing")[0]; level != slog.LevelError {
+		t.Fatalf("logged at %v, want ERROR", level)
+	}
+}
+
+// A consumer deleted while the client is disconnected gets no 409 from the
+// server. After the reconnect, its pulls get no responders.
+func TestConsume_ConsumerDeletedWhileDisconnectedLogged(t *testing.T) {
+	ns := startServerHandle(t)
+	stream := createStream(t, ns.ClientURL(), "EVENTS", "test.event")
+	logs := &logRecords{}
+	startRuntimeAudit(t, ns, stream, slog.New(logs), okSubscriber, true)
+	waitFor(t, func() bool { return len(logs.withMessage("nats: consumer missing")) > 0 })
+	rec := logs.withMessage("nats: consumer missing")[0]
+	if rec["consumer"].String() != "audit" || !errors.Is(rec["error"].Any().(error), natsio.ErrNoResponders) {
+		t.Fatalf("log record %v", rec)
+	}
+}
+
+// startServerHandle is startServer for a test that needs the server itself.
+func startServerHandle(t *testing.T) *server.Server {
+	t.Helper()
+	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true, JetStream: true, StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns.Start()
+	if !ns.ReadyForConnections(testWait) {
+		t.Fatal("nats-server did not become ready")
+	}
+	t.Cleanup(ns.Shutdown)
+	return ns
+}
+
+// startRuntimeAudit starts a runtime with one subscriber in the group
+// "audit" on stream EVENTS, pulling with a 1s heartbeat, and then deletes
+// the group's consumer. With disconnect, the server drops the runtime's
+// connection before the delete, so the runtime sees no 409.
+func startRuntimeAudit(t *testing.T, ns *server.Server, stream jetstream.Stream, logger *slog.Logger, h mesh.SubscriberHandler, disconnect bool) {
+	t.Helper()
+	cfg := testConfig(ns.ClientURL())
+	cfg[PullExpiryKey] = "2s"
+	cfg[PullHeartbeatKey] = "1s"
+	md := map[string]string{StreamKey: "EVENTS"}
+	r := startRuntime(t, cfg, nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: h}}, WithLogger(logger))
+	if disconnect {
+		id, err := r.client.nc.GetClientID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ns.DisconnectClientByID(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := stream.DeleteConsumer(context.Background(), "audit"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// shortMissingLogInterval sets missingLogInterval to 100ms for one test.
+func shortMissingLogInterval(t *testing.T) {
+	old := missingLogInterval
+	missingLogInterval = 100 * time.Millisecond
+	t.Cleanup(func() { missingLogInterval = old })
+}
+
+// recreateAudit creates the group "audit"'s consumer again, as another
+// instance's Start would.
+func recreateAudit(t *testing.T, stream jetstream.Stream) {
+	t.Helper()
+	if _, err := stream.CreateOrUpdateConsumer(context.Background(), jetstream.ConsumerConfig{Durable: "audit", FilterSubject: "test.event", AckPolicy: jetstream.AckExplicitPolicy}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// missingCountSettles waits three intervals and returns how many
+// "nats: consumer missing" records there are.
+func missingCountSettles(logs *logRecords) int {
+	time.Sleep(3 * missingLogInterval)
+	return len(logs.withMessage("nats: consumer missing"))
+}
+
+func TestConsume_MissingConsumerLoggedAgain(t *testing.T) {
+	shortMissingLogInterval(t)
+	ns := startServerHandle(t)
+	stream := createStream(t, ns.ClientURL(), "EVENTS", "test.event")
+	logs := &logRecords{}
+	startRuntimeAudit(t, ns, stream, slog.New(logs), okSubscriber, false)
+
+	waitFor(t, func() bool { return len(logs.withMessage("nats: consumer missing")) >= 3 })
+	rec := logs.withMessage("nats: consumer missing")[2]
+	if rec["consumer"].String() != "audit" {
+		t.Fatalf("log record %v", rec)
+	}
+	if _, ok := rec["error"]; ok {
+		t.Fatalf("repeated record has an error: %v", rec)
+	}
+}
+
+// nats.go stopped consuming on the 409, so a consumer created again still
+// gets nothing from this runtime.
+func TestConsume_StoppedConsumerLoggedAfterRecreated(t *testing.T) {
+	shortMissingLogInterval(t)
+	ns := startServerHandle(t)
+	stream := createStream(t, ns.ClientURL(), "EVENTS", "test.event")
+	logs := &logRecords{}
+	startRuntimeAudit(t, ns, stream, slog.New(logs), okSubscriber, false)
+	waitFor(t, func() bool { return len(logs.withMessage("nats: consumer missing")) > 0 })
+
+	recreateAudit(t, stream)
+	n := missingCountSettles(logs)
+	if m := missingCountSettles(logs); m <= n {
+		t.Fatalf("%d records, then %d, want more", n, m)
+	}
+}
+
+// nats.go kept pulling after the disconnect, so a consumer created again
+// delivers to this runtime, and is no longer logged.
+func TestConsume_PulledConsumerNotLoggedAfterRecreated(t *testing.T) {
+	shortMissingLogInterval(t)
+	ns := startServerHandle(t)
+	stream := createStream(t, ns.ClientURL(), "EVENTS", "test.event")
+	logs := &logRecords{}
+	var got atomic.Int32
+	startRuntimeAudit(t, ns, stream, slog.New(logs), func(ctx context.Context, m mesh.Message) error {
+		got.Add(1)
+		return nil
+	}, true)
+	waitFor(t, func() bool { return len(logs.withMessage("nats: consumer missing")) > 0 })
+
+	recreateAudit(t, stream)
+	publishEvents(t, ns.ClientURL(), 1)
+	waitFor(t, func() bool { return got.Load() == 1 })
+	n := missingCountSettles(logs)
+	if m := missingCountSettles(logs); m != n {
+		t.Fatalf("%d records, then %d, want no more", n, m)
+	}
+}
+
+func TestConsume_DeletedOrderedConsumerNotLoggedAsMissing(t *testing.T) {
+	url := startServer(t)
+	stream := createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	var got atomic.Int32
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "none"}
+	r := startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: mesh.ConsumerGroupNone, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		got.Add(1)
+		return nil
+	}}}, WithLogger(slog.New(logs)))
+
+	rc, _ := r.Receiver(eventTarget)
+	if err := stream.DeleteConsumer(context.Background(), rc.Consumer().CachedInfo().Name); err != nil {
+		t.Fatal(err)
+	}
+	// The message arrives only after nats.go has reported the deleted
+	// consumer and created it again.
+	publishEvents(t, url, 1)
+	waitFor(t, func() bool { return got.Load() == 1 })
+	if recs := logs.withMessage("nats: consumer missing"); len(recs) != 0 {
+		t.Fatalf("ordered consumer logged as missing: %v", recs)
+	}
+}
+
 func TestConsume_NakDelayDelaysRedelivery(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")

@@ -83,7 +83,7 @@
   },
   {
    "id": "acks-server-policy",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "c.acks = s.ack != ackNone && cfg.AckPolicy != jetstream.AckNonePolicy",
    "new": "c.acks = s.ack != ackNone",
    "intent": "With create_consumer=false and a server-side ack policy of none, the runtime still acks and sets Mesh-Deadline.",
@@ -357,7 +357,7 @@
   },
   {
    "id": "create-false-creates",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "\t\tcons, err = stream.Consumer(ctx, s.group)\n",
    "new": "\t\tcons, err = stream.CreateOrUpdateConsumer(ctx, s.config)\n",
    "intent": "create_consumer=false creates or overwrites the consumer instead of using the existing one.",
@@ -373,7 +373,7 @@
   },
   {
    "id": "deadline-index",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "i := min(max(int(delivered)-1, 0), n-1)",
    "new": "i := min(max(int(delivered), 0), n-1)",
    "intent": "A delivery's deadline uses the next backoff entry instead of its own.",
@@ -593,7 +593,7 @@
   },
   {
    "id": "last-delivery-off-by-one",
-   "path": "nats/runtime_jetstream.go",
+   "path": "nats/consumers.go",
    "old": "return delivered >= uint64(c.maxDeliver)",
    "new": "return delivered > uint64(c.maxDeliver)",
    "intent": "The failure on the last delivery is not reported as final.",
@@ -625,7 +625,7 @@
   },
   {
    "id": "late-interval-default",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "var lateStartLogInterval = time.Minute",
    "new": "var lateStartLogInterval = time.Millisecond",
    "intent": "The default limit becomes a millisecond, so late-start warnings are effectively unlimited.",
@@ -634,7 +634,7 @@
   },
   {
    "id": "late-last-not-set",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "c.lastLateLog, c.lateSkipped = now, 0",
    "new": "c.lateSkipped = 0",
    "intent": "The interval never starts, so every late start is logged.",
@@ -666,7 +666,7 @@
   },
   {
    "id": "late-never-logged",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "\treturn skipped, true\n}",
    "new": "\treturn skipped, false\n}",
    "intent": "No late-start warning is ever logged.",
@@ -698,7 +698,7 @@
   },
   {
    "id": "late-skipped-not-counted",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "\t\tc.lateSkipped++\n",
    "new": "",
    "intent": "Late starts within the interval are not counted, so skipped is always 0.",
@@ -706,7 +706,7 @@
   },
   {
    "id": "late-skipped-not-reset",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "c.lastLateLog, c.lateSkipped = now, 0",
    "new": "c.lastLateLog = now",
    "intent": "skipped keeps counting across warnings, so later warnings over-report.",
@@ -714,7 +714,7 @@
   },
   {
    "id": "late-skipped-not-returned",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "\tskipped = c.lateSkipped\n",
    "new": "",
    "intent": "The warning after the interval reports skipped 0 even when starts were skipped.",
@@ -722,7 +722,7 @@
   },
   {
    "id": "maxdeliver-not-read",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "\tc.maxDeliver = cfg.MaxDeliver\n",
    "new": "",
    "intent": "maxDeliver stays 0, so every handler failure is reported as final.",
@@ -850,7 +850,7 @@
   },
   {
    "id": "open-ack-wait",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "\tc.ackWait = cfg.AckWait\n",
    "new": "",
    "intent": "Deliveries get a deadline of their arrival time instead of arrival plus ack_wait.",
@@ -866,7 +866,7 @@
   },
   {
    "id": "ordered-deliver-policy",
-   "path": "nats/jetstream.go",
+   "path": "nats/consumers.go",
    "old": "\t\t\tDeliverPolicy:     s.config.DeliverPolicy,\n",
    "new": "",
    "intent": "An ordered consumer ignores deliver_policy new and replays the whole stream.",

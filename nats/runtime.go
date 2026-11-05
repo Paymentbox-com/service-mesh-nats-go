@@ -61,6 +61,10 @@ type Runtime struct {
 	pendingMu sync.Mutex
 	pending   map[*delivery]struct{}
 
+	// missing holds the JetStream consumers nats.go reported missing, as
+	// *jsConsumer keys, so watchMissing can log them again.
+	missing sync.Map
+
 	handlerCtx     context.Context
 	cancelHandlers context.CancelFunc
 	sem            chan struct{}
@@ -177,6 +181,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 	r.subs = subs
 	r.consumers = consumers
+	if len(consumers) > 0 {
+		go r.watchMissing(r.handlerCtx)
+	}
 	r.state = stateRunning
 	r.running.Store(true)
 	return nil
