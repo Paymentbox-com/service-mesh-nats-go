@@ -86,12 +86,20 @@ func (r *Runtime) serveJetStream(d *delivery) {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithDeadline(ctx, deadline)
 			defer cancel()
+			if now := time.Now(); now.After(deadline) {
+				r.logLateStart(c, meta, in.Metadata[mesh.MessageIDKey], now, now.Sub(deadline))
+			}
 		}
 	}
 
 	herr := callSubscriber(ctx, b.subscriber, in)
 	if herr != nil {
-		r.logger.Error("nats: subscriber handler failed", "subject", b.subject, "stream", b.js.stream, "error", herr)
+		attrs := []any{"subject", b.subject, "stream", b.js.stream}
+		if meta != nil {
+			attrs = append(attrs, "delivery_attempt", meta.NumDelivered)
+		}
+		attrs = append(attrs, "error", herr)
+		r.logger.Error("nats: subscriber handler failed", attrs...)
 	}
 	// Without acks there is no reply to send, and Stop never sees these
 	// deliveries, so they skip settle.
@@ -106,6 +114,9 @@ func (r *Runtime) serveJetStream(d *delivery) {
 	if herr != nil {
 		if err := r.nak(d); err != nil {
 			r.logger.Error("nats: nak failed", "subject", b.subject, "stream", b.js.stream, "error", err)
+		}
+		if meta != nil && c.lastDelivery(meta.NumDelivered) {
+			r.logFinalFailure(c, meta, in.Metadata[mesh.MessageIDKey])
 		}
 		return
 	}
@@ -122,6 +133,52 @@ func (r *Runtime) serveJetStream(d *delivery) {
 	if err != nil {
 		r.logger.Error("nats: ack failed", "subject", b.subject, "stream", b.js.stream, "error", err)
 	}
+}
+
+// logLateStart logs a handler that starts lateBy after its delivery's ack
+// deadline, unless the consumer logged one within lateStartLogInterval.
+func (r *Runtime) logLateStart(c *jsConsumer, meta *jetstream.MsgMetadata, messageID string, now time.Time, lateBy time.Duration) {
+	skipped, logged := c.lateStartLogged(now)
+	if !logged {
+		return
+	}
+	b := c.sub
+	attrs := []any{
+		"subject", b.subject,
+		"stream", b.js.stream,
+		"consumer", meta.Consumer,
+		"stream_sequence", meta.Sequence.Stream,
+		"delivery_attempt", meta.NumDelivered,
+	}
+	if messageID != "" {
+		attrs = append(attrs, "message_id", messageID)
+	}
+	attrs = append(attrs, "late_by", lateBy, "skipped", skipped)
+	r.logger.Warn("nats: handler started after its ack deadline", attrs...)
+}
+
+// lastDelivery reports whether delivery number delivered is the last one the
+// server sends. A maxDeliver of -1 converts to the largest uint64, so no
+// delivery is the last.
+func (c *jsConsumer) lastDelivery(delivered uint64) bool {
+	return delivered >= uint64(c.maxDeliver)
+}
+
+// logFinalFailure logs a message whose handler failed on its last delivery.
+func (r *Runtime) logFinalFailure(c *jsConsumer, meta *jetstream.MsgMetadata, messageID string) {
+	b := c.sub
+	attrs := []any{
+		"subject", b.subject,
+		"stream", b.js.stream,
+		"consumer", meta.Consumer,
+		"stream_sequence", meta.Sequence.Stream,
+		"delivery_attempt", meta.NumDelivered,
+		"max_deliver", c.maxDeliver,
+	}
+	if messageID != "" {
+		attrs = append(attrs, "message_id", messageID)
+	}
+	r.logger.Error("nats: message will not be delivered again", attrs...)
 }
 
 func (r *Runtime) nak(d *delivery) error {

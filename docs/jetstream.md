@@ -206,6 +206,25 @@ Handlers need to be idempotent, because a message can be handled more than
 once after a missed deadline, a failed ack, or a nak at the end of a drain.
 `ack_policy = "double"` confirms that each ack was recorded.
 
+A message waits in the runtime until a handler slot is free, and its ack
+deadline runs while it waits. A message that waits past its deadline is sent
+again, and each of those deliveries counts toward `max_deliver`. Under
+sustained load, a message can use up its deliveries before a handler has
+tried it more than once or twice.
+
+Two log messages show this:
+
+- `nats: handler started after its ack deadline` warns that a handler
+  started late, and `late_by` says by how much. It is logged at most once a
+  minute for each consumer. `skipped` counts the late starts since the last
+  warning that were not logged.
+- `nats: message will not be delivered again` reports a handler that failed
+  on the message's last delivery under `max_deliver`.
+
+The deadline is measured from when the runtime receives the message from
+nats.go. Time the message spent in nats.go's buffer before that is not
+counted, so some late starts are not reported.
+
 ## The Handler's Time Limit
 
 A handler that runs past its ack deadline gets its message delivered again

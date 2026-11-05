@@ -294,16 +294,27 @@ func (p pullSettings) consumeOpts() []jetstream.PullConsumeOpt {
 	return opts
 }
 
+// lateStartLogInterval is the least time between two late-start warnings for
+// one consumer.
+var lateStartLogInterval = time.Minute
+
 // jsConsumer is a JetStream subscriber's consumer once Start has created or
-// found it. acks, ackWait, and backoff come from the server's settings for
-// the consumer.
+// found it. acks, ackWait, backoff, and maxDeliver come from the server's
+// settings for the consumer. A maxDeliver of -1 means no limit.
 type jsConsumer struct {
-	sub      *subscription
-	consumer jetstream.Consumer
-	cc       jetstream.ConsumeContext
-	acks     bool
-	ackWait  time.Duration
-	backoff  []time.Duration
+	sub        *subscription
+	consumer   jetstream.Consumer
+	cc         jetstream.ConsumeContext
+	acks       bool
+	ackWait    time.Duration
+	backoff    []time.Duration
+	maxDeliver int
+
+	// lateMu guards lastLateLog, when a late start was last logged, and
+	// lateSkipped, how many late starts were not logged since then.
+	lateMu      sync.Mutex
+	lastLateLog time.Time
+	lateSkipped int
 }
 
 // openConsumer looks up the subscriber's stream and creates or looks up its
@@ -342,7 +353,22 @@ func openConsumer(ctx context.Context, js jetstream.JetStream, b *subscription) 
 	c.acks = s.ack != ackNone && cfg.AckPolicy != jetstream.AckNonePolicy
 	c.ackWait = cfg.AckWait
 	c.backoff = cfg.BackOff
+	c.maxDeliver = cfg.MaxDeliver
 	return c, nil
+}
+
+// lateStartLogged reports whether a late start at now is logged, and if so,
+// how many late starts were not logged since the last one that was.
+func (c *jsConsumer) lateStartLogged(now time.Time) (skipped int, logged bool) {
+	c.lateMu.Lock()
+	defer c.lateMu.Unlock()
+	if now.Sub(c.lastLateLog) < lateStartLogInterval {
+		c.lateSkipped++
+		return 0, false
+	}
+	skipped = c.lateSkipped
+	c.lastLateLog, c.lateSkipped = now, 0
+	return skipped, true
 }
 
 // deadline is when the server sends a message again unless it is acked,

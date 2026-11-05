@@ -378,6 +378,245 @@ func TestConsume_PanickingHandlerRedelivered(t *testing.T) {
 	waitFor(t, func() bool { return calls.Load() >= 2 })
 }
 
+func TestConsume_FailureOnLastDeliveryLogged(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	md := map[string]string{StreamKey: "EVENTS", MaxDeliverKey: "2"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		return errors.New("boom")
+	}}}, WithLogger(slog.New(logs)))
+
+	c := testClient(t, testConfig(url))
+	msg := mesh.Message{Target: eventTarget, Metadata: map[string]string{mesh.MessageIDKey: "id-1"}}
+	if err := c.Publish(context.Background(), msg, map[string]string{StreamKey: "EVENTS"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(logs.withMessage("nats: message will not be delivered again")) > 0 })
+	time.Sleep(300 * time.Millisecond) // give an unwanted extra record time to show up
+	recs := logs.withMessage("nats: message will not be delivered again")
+	if len(recs) != 1 {
+		t.Fatalf("%d final failure records, want 1", len(recs))
+	}
+	rec := recs[0]
+	if rec["subject"].String() != "test.event" ||
+		rec["stream"].String() != "EVENTS" ||
+		rec["consumer"].String() != "audit" ||
+		rec["stream_sequence"].Uint64() != 1 ||
+		rec["delivery_attempt"].Uint64() != 2 ||
+		rec["max_deliver"].Int64() != 2 ||
+		rec["message_id"].String() != "id-1" {
+		t.Fatalf("log record %v", rec)
+	}
+}
+
+func TestConsume_FailureBeforeLastDeliveryNotLoggedAsFinal(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	var calls atomic.Int32
+	md := map[string]string{StreamKey: "EVENTS", MaxDeliverKey: "2"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		if calls.Add(1) == 1 {
+			return errors.New("boom")
+		}
+		return nil
+	}}}, WithLogger(slog.New(logs)))
+
+	publishEvents(t, url, 1)
+	waitFor(t, func() bool { return calls.Load() == 2 })
+	time.Sleep(300 * time.Millisecond) // give an unwanted record time to show up
+	if recs := logs.withMessage("nats: message will not be delivered again"); len(recs) != 0 {
+		t.Fatalf("failure on delivery 1 of 2 logged as final: %v", recs)
+	}
+}
+
+func TestConsume_UnlimitedMaxDeliverNeverLoggedAsFinal(t *testing.T) {
+	url := startServer(t)
+	stream := createStream(t, url, "EVENTS", "test.event")
+	if _, err := stream.CreateConsumer(context.Background(), jetstream.ConsumerConfig{
+		Durable:       "audit",
+		FilterSubject: "test.event",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		MaxDeliver:    -1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logs := &logRecords{}
+	var calls atomic.Int32
+	md := map[string]string{StreamKey: "EVENTS", CreateConsumerKey: "false"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		calls.Add(1)
+		return errors.New("boom")
+	}}}, WithLogger(slog.New(logs)))
+
+	publishEvents(t, url, 1)
+	waitFor(t, func() bool { return calls.Load() >= 3 })
+	if recs := logs.withMessage("nats: message will not be delivered again"); len(recs) != 0 {
+		t.Fatalf("failure with unlimited max_deliver logged as final: %v", recs)
+	}
+}
+
+func TestConsume_HandlerFailureLogsDeliveryAttempt(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	md := map[string]string{StreamKey: "EVENTS", MaxDeliverKey: "2"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		return errors.New("boom")
+	}}}, WithLogger(slog.New(logs)))
+
+	publishEvents(t, url, 1)
+	waitFor(t, func() bool { return len(logs.withMessage("nats: subscriber handler failed")) == 2 })
+	recs := logs.withMessage("nats: subscriber handler failed")
+	if recs[0]["delivery_attempt"].Uint64() != 1 || recs[1]["delivery_attempt"].Uint64() != 2 {
+		t.Fatalf("delivery attempts %v and %v, want 1 and 2", recs[0]["delivery_attempt"], recs[1]["delivery_attempt"])
+	}
+}
+
+func TestConsume_LateStartLogged(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	holdTarget := mesh.Target{Segments: []string{"test", "hold"}, Kind: mesh.KindTopic}
+	entered := make(chan struct{}, 1)
+	hold := mesh.Subscriber{Target: holdTarget, Handler: func(ctx context.Context, m mesh.Message) error {
+		entered <- struct{}{}
+		time.Sleep(500 * time.Millisecond)
+		return nil
+	}}
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "1"
+	md := map[string]string{StreamKey: "EVENTS", AckWaitKey: "200ms", MaxDeliverKey: "1"}
+	startRuntime(t, cfg, nil, []mesh.Subscriber{hold, {Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: okSubscriber}}, WithLogger(slog.New(logs)))
+
+	c := testClient(t, testConfig(url))
+	if err := c.Publish(context.Background(), mesh.Message{Target: holdTarget}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	msg := mesh.Message{Target: eventTarget, Metadata: map[string]string{mesh.MessageIDKey: "id-1"}}
+	if err := c.Publish(context.Background(), msg, map[string]string{StreamKey: "EVENTS"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(logs.withMessage("nats: handler started after its ack deadline")) > 0 })
+	rec := logs.withMessage("nats: handler started after its ack deadline")[0]
+	if rec["subject"].String() != "test.event" ||
+		rec["stream"].String() != "EVENTS" ||
+		rec["consumer"].String() != "audit" ||
+		rec["stream_sequence"].Uint64() != 1 ||
+		rec["delivery_attempt"].Uint64() != 1 ||
+		rec["message_id"].String() != "id-1" ||
+		rec["late_by"].Duration() <= 0 ||
+		rec["skipped"].Int64() != 0 {
+		t.Fatalf("log record %v", rec)
+	}
+}
+
+func TestConsume_StartBeforeDeadlineNotLogged(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	got := make(chan struct{}, 1)
+	md := map[string]string{StreamKey: "EVENTS"}
+	startRuntime(t, testConfig(url), nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		got <- struct{}{}
+		return nil
+	}}}, WithLogger(slog.New(logs)))
+
+	publishEvents(t, url, 1)
+	select {
+	case <-got:
+	case <-time.After(testWait):
+		t.Fatal("subscriber did not receive the message")
+	}
+	if recs := logs.withMessage("nats: handler started after its ack deadline"); len(recs) != 0 {
+		t.Fatalf("start before the deadline logged as late: %v", recs)
+	}
+}
+
+func TestConsume_LateStartsWithinIntervalSkipped(t *testing.T) {
+	old := lateStartLogInterval
+	lateStartLogInterval = time.Second
+	t.Cleanup(func() { lateStartLogInterval = old })
+
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	var handled atomic.Int32
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "1"
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "explicit", AckWaitKey: "100ms", MaxDeliverKey: "1"}
+	startRuntime(t, cfg, nil, []mesh.Subscriber{{Target: eventTarget, ConsumerGroup: "audit", Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		time.Sleep(300 * time.Millisecond)
+		handled.Add(1)
+		return nil
+	}}}, WithLogger(slog.New(logs)))
+
+	// Each message after the first waits 300ms for the handler slot, past
+	// its 100ms deadline, so messages 2 and 3 start late within the interval.
+	publishEvents(t, url, 3)
+	waitFor(t, func() bool { return handled.Load() == 3 })
+	if n := len(logs.withMessage("nats: handler started after its ack deadline")); n != 1 {
+		t.Fatalf("%d late-start records for two late starts within the interval, want 1", n)
+	}
+
+	// Message 5 starts late after the interval, and is logged with the one
+	// skipped.
+	time.Sleep(time.Second)
+	publishEvents(t, url, 2)
+	waitFor(t, func() bool { return len(logs.withMessage("nats: handler started after its ack deadline")) == 2 })
+	rec := logs.withMessage("nats: handler started after its ack deadline")[1]
+	if rec["stream_sequence"].Uint64() != 5 || rec["skipped"].Int64() != 1 {
+		t.Fatalf("log record %v, want stream_sequence 5 and skipped 1", rec)
+	}
+
+	// Message 7 starts late after another interval with none skipped.
+	time.Sleep(time.Second)
+	publishEvents(t, url, 2)
+	waitFor(t, func() bool { return len(logs.withMessage("nats: handler started after its ack deadline")) == 3 })
+	rec = logs.withMessage("nats: handler started after its ack deadline")[2]
+	if rec["stream_sequence"].Uint64() != 7 || rec["skipped"].Int64() != 0 {
+		t.Fatalf("log record %v, want stream_sequence 7 and skipped 0", rec)
+	}
+}
+
+func TestConsume_LateStartWithoutAcksNotLogged(t *testing.T) {
+	url := startServer(t)
+	createStream(t, url, "EVENTS", "test.event")
+	logs := &logRecords{}
+	holdTarget := mesh.Target{Segments: []string{"test", "hold"}, Kind: mesh.KindTopic}
+	entered := make(chan struct{}, 1)
+	hold := mesh.Subscriber{Target: holdTarget, Handler: func(ctx context.Context, m mesh.Message) error {
+		entered <- struct{}{}
+		time.Sleep(300 * time.Millisecond)
+		return nil
+	}}
+	got := make(chan struct{}, 1)
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "1"
+	md := map[string]string{StreamKey: "EVENTS", AckPolicyKey: "none"}
+	startRuntime(t, cfg, nil, []mesh.Subscriber{hold, {Target: eventTarget, ConsumerGroup: mesh.ConsumerGroupNone, Metadata: md, Handler: func(ctx context.Context, m mesh.Message) error {
+		got <- struct{}{}
+		return nil
+	}}}, WithLogger(slog.New(logs)))
+
+	c := testClient(t, testConfig(url))
+	if err := c.Publish(context.Background(), mesh.Message{Target: holdTarget}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	publishEvents(t, url, 1)
+	select {
+	case <-got:
+	case <-time.After(testWait):
+		t.Fatal("subscriber did not receive the message")
+	}
+	if recs := logs.withMessage("nats: handler started after its ack deadline"); len(recs) != 0 {
+		t.Fatalf("consumer without acks logged a late start: %v", recs)
+	}
+}
+
 func TestConsume_NakDelayDelaysRedelivery(t *testing.T) {
 	url := startServer(t)
 	createStream(t, url, "EVENTS", "test.event")
