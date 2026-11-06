@@ -50,17 +50,46 @@ func checkKind(t mesh.Target, want mesh.Kind, use string) error {
 	return nil
 }
 
+// prepareSubscription validates t for use and returns its subscription, with
+// the queue group resolved from group and deploymentGroup.
+func prepareSubscription(t mesh.Target, want mesh.Kind, use, group, deploymentGroup string) (subscription, error) {
+	if err := checkKind(t, want, use); err != nil {
+		return subscription{}, err
+	}
+	subj, err := subject(t)
+	if err != nil {
+		return subscription{}, err
+	}
+	return subscription{
+		subject: subj,
+		queue:   consumerGroup(group, deploymentGroup),
+		target:  t,
+	}, nil
+}
+
 // consumerGroup resolves the NATS queue group of an Endpoint or Subscriber
-// from its metadata, falling back to the runtime's deployment group. The
-// empty string means a plain subscription with no group. A Target carries no
-// consumer group, so its metadata is not read.
-func consumerGroup(metadata map[string]string, deploymentGroup string) string {
-	switch v := metadata[mesh.ConsumerGroupKey]; v {
+// from its ConsumerGroup, falling back to the runtime's deployment group.
+// The empty string means a plain subscription with no group.
+func consumerGroup(group, deploymentGroup string) string {
+	switch group {
 	case "":
 		return deploymentGroup
 	case mesh.ConsumerGroupNone:
 		return ""
 	default:
-		return v
+		return group
 	}
+}
+
+// mergeSettings returns a Target's metadata with over on top, so a value in
+// over wins.
+func mergeSettings(target, over map[string]string) map[string]string {
+	md := make(map[string]string, len(target)+len(over))
+	for k, v := range target {
+		md[k] = v
+	}
+	for k, v := range over {
+		md[k] = v
+	}
+	return md
 }

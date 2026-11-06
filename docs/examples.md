@@ -87,7 +87,7 @@ if err := c.Publish(ctx, mesh.Message{Target: created, Payload: []byte("order 42
 ## Consumer Groups
 
 Two deployments on one topic each handle every event once. A subscriber
-with `consumer_group` set to `none` handles every event on every instance.
+whose `ConsumerGroup` is `none` handles every event on every instance.
 Each runtime is built from its own client, since a client is one connection.
 
 ```go
@@ -120,9 +120,9 @@ audit := serve("audit", sub)
 
 // With no consumer group, every instance of a deployment handles every event.
 broadcast := mesh.Subscriber{
-    Target:   created,
-    Metadata: map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone},
-    Handler:  onCreated,
+    Target:        created,
+    ConsumerGroup: mesh.ConsumerGroupNone,
+    Handler:       onCreated,
 }
 cache := serve("cache", broadcast)
 

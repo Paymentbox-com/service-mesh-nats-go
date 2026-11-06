@@ -60,7 +60,8 @@ func TestRequest_RoundTrip(t *testing.T) {
 
 func TestRequest_EmptyPayloadAndNoMetadata(t *testing.T) {
 	url := startServer(t)
-	startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: okEndpoint}}, nil)
+	empty := func(ctx context.Context, m mesh.Message) (mesh.Message, error) { return mesh.Message{}, nil }
+	startRuntime(t, testConfig(url), []mesh.Endpoint{{Target: echoTarget, Handler: empty}}, nil)
 
 	c := testClient(t, testConfig(url))
 	reply, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
@@ -77,8 +78,8 @@ func TestRequest_NoResponders(t *testing.T) {
 	c := testClient(t, testConfig(url))
 
 	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
-	if !errors.Is(err, natsio.ErrNoResponders) {
-		t.Fatalf("want natsio.ErrNoResponders, got %v", err)
+	if !errors.Is(err, ErrNoResponders) {
+		t.Fatalf("want nats.ErrNoResponders, got %v", err)
 	}
 }
 
@@ -101,6 +102,9 @@ func TestRequest_HandlerError(t *testing.T) {
 	if !errors.As(err, &he) || he.Text != "boom" {
 		t.Fatalf("returned error: want HandlerError{boom}, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error message %q does not include the handler's text", err.Error())
+	}
 
 	_, err = c.Request(context.Background(), mesh.Message{Target: panicking}, nil)
 	if !errors.As(err, &he) || !strings.Contains(he.Text, "kaboom") {
@@ -110,22 +114,23 @@ func TestRequest_HandlerError(t *testing.T) {
 
 func TestRequest_Timeouts(t *testing.T) {
 	url := startServer(t)
+	// The handler ignores its context, whose deadline matches the caller's,
+	// so only the caller's side times out.
+	release := make(chan struct{})
 	slow := mesh.Endpoint{Target: echoTarget, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
-		select {
-		case <-time.After(testWait):
-		case <-ctx.Done():
-		}
+		<-release
 		return m, nil
 	}}
 	startRuntime(t, testConfig(url), []mesh.Endpoint{slow}, nil)
+	t.Cleanup(func() { close(release) })
 
 	cfg := testConfig(url)
 	cfg[RequestTimeoutKey] = "100ms"
 	c := testClient(t, cfg)
 
 	_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
-	if !errors.Is(err, natsio.ErrTimeout) {
-		t.Fatalf("configured timeout: want natsio.ErrTimeout, got %v", err)
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("configured timeout: want nats.ErrTimeout, got %v", err)
 	}
 
 	start := time.Now()
@@ -189,25 +194,25 @@ func TestPublish_CancelledContext(t *testing.T) {
 
 func TestPublish_ConsumerGroups(t *testing.T) {
 	// Two runtimes, each with one subscriber, and one published message.
-	none := map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}
-	shared := map[string]string{mesh.ConsumerGroupKey: "order-consumers"}
+	none := mesh.ConsumerGroupNone
+	shared := "order-consumers"
 	cases := []struct {
-		name          string
-		groups        [2]string
-		metadata      [2]map[string]string
-		wantDelivered int32
+		name           string
+		groups         [2]string
+		consumerGroups [2]string
+		wantDelivered  int32
 	}{
-		{name: "same deployment, key absent: one instance handles it", groups: [2]string{"billing", "billing"}, wantDelivered: 1},
-		{name: "different deployments, key absent: each deployment handles it", groups: [2]string{"billing", "audit"}, wantDelivered: 2},
-		{name: "same deployment, none: every instance handles it", groups: [2]string{"billing", "billing"}, metadata: [2]map[string]string{none, none}, wantDelivered: 2},
-		{name: "different deployments, shared named group: one instance handles it", groups: [2]string{"billing", "audit"}, metadata: [2]map[string]string{shared, shared}, wantDelivered: 1},
+		{name: "same deployment, group empty: one instance handles it", groups: [2]string{"billing", "billing"}, wantDelivered: 1},
+		{name: "different deployments, group empty: each deployment handles it", groups: [2]string{"billing", "audit"}, wantDelivered: 2},
+		{name: "same deployment, none: every instance handles it", groups: [2]string{"billing", "billing"}, consumerGroups: [2]string{none, none}, wantDelivered: 2},
+		{name: "different deployments, shared named group: one instance handles it", groups: [2]string{"billing", "audit"}, consumerGroups: [2]string{shared, shared}, wantDelivered: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			url := startServer(t)
 			var received atomic.Int32
 			for i := 0; i < 2; i++ {
-				sub := mesh.Subscriber{Target: eventTarget, Metadata: tc.metadata[i], Handler: func(ctx context.Context, m mesh.Message) error {
+				sub := mesh.Subscriber{Target: eventTarget, ConsumerGroup: tc.consumerGroups[i], Handler: func(ctx context.Context, m mesh.Message) error {
 					received.Add(1)
 					return nil
 				}}
@@ -228,12 +233,13 @@ func TestPublish_ConsumerGroups(t *testing.T) {
 }
 
 func TestPublish_ConsumerGroupOnTargetIsIgnored(t *testing.T) {
-	// A Target carries no consumer group, so both subscribers join the
+	// A consumer group comes only from the subscriber's field, so a
+	// "consumer_group" key on the target is ignored. Both subscribers join the
 	// runtimes' shared deployment group and one of them handles the event.
 	url := startServer(t)
 	var received atomic.Int32
 	for _, group := range []string{"a", "b"} {
-		target := mesh.Target{Segments: eventTarget.Segments, Kind: mesh.KindTopic, Metadata: map[string]string{mesh.ConsumerGroupKey: group}}
+		target := mesh.Target{Segments: eventTarget.Segments, Kind: mesh.KindTopic, Metadata: map[string]string{"consumer_group": group}}
 		startRuntime(t, mesh.Config{URLKey: url, mesh.DeploymentGroupKey: "same"}, nil, []mesh.Subscriber{{Target: target, Handler: func(ctx context.Context, m mesh.Message) error {
 			received.Add(1)
 			return nil
@@ -406,6 +412,50 @@ func TestStop_DrainsInFlightHandler(t *testing.T) {
 	}
 	if err := <-replies; err != nil {
 		t.Fatalf("request during drain: %v", err)
+	}
+}
+
+func TestStop_AnswersRequestsWaitingDuringDrain(t *testing.T) {
+	url := startServer(t)
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	cfg := testConfig(url)
+	cfg[ConcurrencyKey] = "1"
+	r := startRuntime(t, cfg, []mesh.Endpoint{{Target: echoTarget, Handler: func(ctx context.Context, m mesh.Message) (mesh.Message, error) {
+		entered <- struct{}{}
+		<-release
+		return mesh.Message{Payload: m.Payload}, nil
+	}}}, nil)
+	c := testClient(t, testConfig(url))
+
+	// The first request holds the only handler slot, and the other two wait
+	// behind it in the runtime.
+	replies := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		go func() {
+			_, err := c.Request(context.Background(), mesh.Message{Target: echoTarget}, nil)
+			replies <- err
+		}()
+	}
+	<-entered
+	time.Sleep(100 * time.Millisecond) // let the other two reach the runtime
+
+	stopped := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), testWait)
+		defer cancel()
+		stopped <- r.Stop(ctx)
+	}()
+	time.Sleep(100 * time.Millisecond) // let Stop begin its drain
+	close(release)
+
+	if err := <-stopped; err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := <-replies; err != nil {
+			t.Fatalf("request %d during drain: %v", i+1, err)
+		}
 	}
 }
 

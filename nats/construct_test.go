@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func TestParseRuntimeSettings(t *testing.T) {
 			name: "defaults",
 			cfg:  mesh.Config{mesh.DeploymentGroupKey: "d"},
 			want: func(s runtimeSettings) bool {
-				return s.deploymentGroup == "d" && s.concurrency > 0 && s.logger != nil
+				return s.deploymentGroup == "d" && s.concurrency == runtime.NumCPU() && s.logger != nil
 			},
 		},
 		{
@@ -206,6 +207,16 @@ func TestRuntime_ServiceMapIsClients(t *testing.T) {
 	}
 }
 
+func TestNewClient_ConnectsWithName(t *testing.T) {
+	cfg := testConfig(startServer(t))
+	cfg[NameKey] = "billing-api"
+	c := testClient(t, cfg)
+
+	if got := c.Conn().Opts.Name; got != "billing-api" {
+		t.Fatalf("connection name %q, want billing-api", got)
+	}
+}
+
 func TestNewClient_ServiceMapKept(t *testing.T) {
 	url := startServer(t)
 	sm := mesh.ServiceMap{Targets: []mesh.Target{echoTarget, eventTarget}}
@@ -220,21 +231,18 @@ func TestNewClient_ServiceMapKept(t *testing.T) {
 }
 
 func TestConsumerGroupResolution(t *testing.T) {
-	none := map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}
-	named := func(n string) map[string]string { return map[string]string{mesh.ConsumerGroupKey: n} }
 	cases := []struct {
-		name     string
-		metadata map[string]string
-		want     string
+		name  string
+		group string
+		want  string
 	}{
-		{name: "absent joins deployment group", want: "billing"},
-		{name: "none gives no group", metadata: none, want: ""},
-		{name: "a name is the group", metadata: named("audit"), want: "audit"},
-		{name: "empty falls through to deployment group", metadata: named(""), want: "billing"},
+		{name: "empty joins deployment group", want: "billing"},
+		{name: "none gives no group", group: mesh.ConsumerGroupNone, want: ""},
+		{name: "a name is the group", group: "audit", want: "audit"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := consumerGroup(tc.metadata, "billing"); got != tc.want {
+			if got := consumerGroup(tc.group, "billing"); got != tc.want {
 				t.Fatalf("want %q, got %q", tc.want, got)
 			}
 		})
@@ -245,7 +253,7 @@ func TestNew_EndpointsAndSubscribersUseConsumerGroup(t *testing.T) {
 	c := testClient(t, testConfig(startServer(t)))
 	cfg := mesh.Config{mesh.DeploymentGroupKey: "billing"}
 	r, err := New(c, cfg,
-		[]mesh.Endpoint{{Target: echoTarget, Metadata: map[string]string{mesh.ConsumerGroupKey: mesh.ConsumerGroupNone}, Handler: okEndpoint}},
+		[]mesh.Endpoint{{Target: echoTarget, ConsumerGroup: mesh.ConsumerGroupNone, Handler: okEndpoint}},
 		[]mesh.Subscriber{{Target: eventTarget, Handler: okSubscriber}},
 	)
 	if err != nil {
